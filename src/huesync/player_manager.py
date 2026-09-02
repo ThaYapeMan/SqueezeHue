@@ -136,6 +136,23 @@ class PlayerManager:
         for p in (session.fifo_path, session.cava_conf_path):
             p.unlink(missing_ok=True)
 
+        # ALSA output device for the virtual player. This is deliberately NOT
+    # "null": ALSA's null plugin discards samples the instant they arrive,
+    # with no clock to pace against, so squeezelite decodes as fast as the
+    # CPU allows - pinning a core at 100% and hammering LMS with stream
+    # requests (a single-threaded Perl server, which then stutters for
+    # every other player too).
+    #
+    # snd-dummy is a real, timer-driven ALSA card, so squeezelite paces at
+    # actual playback speed exactly as it would against a physical DAC.
+    # Measured difference on the same setup: ~100% CPU with null, ~0.2%
+    # with snd-dummy.
+    #
+    # Requires the snd-dummy kernel module on the host (LXCs share the
+    # host kernel) and the resulting /dev/snd nodes passed into the
+    # container - see README.
+    DEFAULT_ALSA_DEVICE = "hw:CARD=Dummy,DEV=0"
+
     def _start_squeezelite(self, session: ActiveSession, profile: Profile) -> None:
         binary = shutil.which("squeezelite")
         if not binary:
@@ -144,7 +161,7 @@ class PlayerManager:
             binary,
             "-n", profile.player_name,
             "-m", profile.player_mac,
-            "-o", "null",
+            "-o", profile.alsa_device or self.DEFAULT_ALSA_DEVICE,
             "-v",
             "-s", f"{profile.lms_host}:{profile.lms_port}",
         ]

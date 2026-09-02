@@ -65,6 +65,10 @@ class Profile:
     lms_port: int = 3483
     player_name: str = "HueSync"
     player_mac: str = ""  # auto-generated on first save if left empty
+    # ALSA output device for the virtual player. Empty means "use the
+    # default" (snd-dummy, see player_manager.DEFAULT_ALSA_DEVICE). Only
+    # set this if you have a reason to point squeezelite somewhere else.
+    alsa_device: str = ""
 
     # Hue
     bridge_id: str = ""

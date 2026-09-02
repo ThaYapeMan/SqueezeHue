@@ -47,6 +47,49 @@ Three points worth understanding before you rely on this:
 - `squeezelite` and `cava` installed and on `PATH`.
 - Python 3.11+.
 - A Lyrion Music Server instance on the same network.
+- **The `snd-dummy` kernel module loaded** - see below.
+
+### Why snd-dummy is required
+
+The virtual player needs an audio output device, but there's no real
+sound card involved - we only want squeezelite's `-v` visualiser data,
+not actual audio. The obvious choice, ALSA's built-in `null` device,
+turns out to be a trap: it discards samples the instant they arrive and
+has **no clock to pace against**, so squeezelite decodes as fast as the
+CPU allows rather than at playback speed. Measured on a Debian LXC that
+meant ~100% CPU on one core, and - worse - LMS itself stuttering for
+every other player, because a single-threaded Perl server was being
+hammered with stream requests from a client consuming minutes of audio
+per second.
+
+`snd-dummy` is a real, timer-driven ALSA card. squeezelite paces against
+it exactly as it would against a physical DAC. Same setup, same track:
+**~0.2% CPU** instead of ~100%, and no LMS stuttering.
+
+On a bare-metal host or VM:
+
+```bash
+modprobe snd-dummy
+echo "snd-dummy" > /etc/modules-load.d/snd-dummy.conf   # persist across reboots
+```
+
+In an **LXC container** the module must be loaded on the *host* (containers
+share the host kernel), then the device nodes passed in. On Proxmox:
+
+```bash
+# On the host:
+modprobe snd-dummy
+echo "snd-dummy" > /etc/modules-load.d/snd-dummy.conf
+cat /proc/asound/cards          # note the Dummy card's number, e.g. 1
+ls -la /dev/snd/                # find controlCN and pcmCND0p for that number
+
+pct set <CTID> -dev0 /dev/snd/controlC1,gid=29
+pct set <CTID> -dev1 /dev/snd/pcmC1D0p,gid=29
+pct reboot <CTID>
+```
+
+Verify inside the container with `squeezelite -l` - the Dummy card should
+be listed alongside `null`.
 
 ### Bridge limitation
 
