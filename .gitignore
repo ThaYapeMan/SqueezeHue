@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Real config with bridge credentials - never commit this
+config.yaml
+
+# Runtime artifacts
+*.fifo
+huesync.db

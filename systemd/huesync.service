@@ -1,0 +1,21 @@
+[Unit]
+Description=HueSync - spectrum-reactive Hue lighting for Lyrion Music Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=huesync
+Group=huesync
+WorkingDirectory=/opt/huesync
+Environment=HUESYNC_CONFIG=/etc/huesync/config.json
+ExecStart=/opt/huesync/.venv/bin/huesync
+Restart=on-failure
+RestartSec=5
+
+# squeezelite/cava write to /dev/shm and spawn subprocesses - keep
+# sandboxing light rather than fighting it for a first version.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
