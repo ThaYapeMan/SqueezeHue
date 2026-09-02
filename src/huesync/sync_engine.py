@@ -80,6 +80,103 @@ class FifoReader:
             os.close(fd)
 
 
+class BandNormaliser:
+    """Converts raw cava bar values into per-band exertion scores.
+
+    Instead of comparing bands against each other in absolute terms (which
+    lets bass dominate almost every frame because it's always energetic),
+    each bar is compared against *its own recent average*:
+
+        exertion(i) = raw[i] / rolling_average(i)
+
+    A bass line that is always present stops being interesting; it only
+    lights up when it is louder than it usually is.  Mids and treble that
+    were previously drowned out now get equal standing whenever they spike
+    above their own baselines.
+
+    The result is re-encoded as bytes (0-255) so it can be fed straight
+    into the existing frame_to_commands() pipeline unchanged:
+
+        exertion 0.0  → byte   0  (band well below its average)
+        exertion 1.0  → byte 128  (band exactly at its average)
+        exertion 2.0  → byte 255  (band at twice its average, clipped here)
+
+    Clipping note — there are two independent ceilings in the pipeline:
+
+    1. HERE at 2× the band's own average.  This is a *musical scale
+       choice*: it sets what "maximally loud relative to normal" means.
+       Raising it makes the output more sensitive to brief spikes;
+       lowering it compresses the dynamic range further.
+
+    2. In frame_to_commands(), after multiplying by profile.sensitivity.
+       That clip (at 1.0, just before the 16-bit RGB conversion) is a
+       *safety ceiling*, not a musical choice.
+
+    These two ceilings interact.  With DEFAULT_ALPHA the normalised output
+    hovers around byte 128 (= 0.5 after ÷ 255) during steady music, so
+    sens=1.0 gives roughly half-brightness on average and peaks briefly
+    at full-brightness.  Raising sensitivity above ~2.0 pushes steady-state
+    output into the upper ceiling and the image becomes uniformly saturated.
+    After this change profile.sensitivity is best treated as a fine-tune
+    around 1.0 rather than the primary loudness driver it was before
+    (the normalisation now does that work).
+    """
+
+    #: EMA smoothing factor.  At 30 Hz, α = 0.02 gives a window of ≈ 1.7 s.
+    #: Raise (e.g. 0.05) to react faster; lower (e.g. 0.01) for a longer
+    #: memory that smooths over brief dynamic shifts.
+    DEFAULT_ALPHA: float = 0.02
+
+    #: Mean raw bar value (0-255) below which the entire output frame is
+    #: zeroed.  Prevents background noise from being amplified into wild
+    #: colours when the track is paused or very quiet.  The EMA still
+    #: updates during silence so the baseline decays naturally.
+    DEFAULT_GATE: float = 5.0
+
+    #: Maximum exertion ratio before clipping.  See class docstring.
+    _EXERTION_CLIP: float = 2.0
+
+    def __init__(
+        self,
+        alpha: float = DEFAULT_ALPHA,
+        gate: float = DEFAULT_GATE,
+    ) -> None:
+        self.alpha = alpha
+        self.gate = gate
+        # Lazily initialised on the first frame so frame size need not be
+        # known at construction time.
+        self._ema: list[float] | None = None
+
+    def normalise(self, frame: bytes) -> bytes:
+        """Return an exertion-normalised copy of *frame* as bytes (0-255).
+
+        Always updates the EMA, even below the silence gate, so the
+        baseline decays during pauses and recovers cleanly on resumption.
+        """
+        n = len(frame)
+
+        if self._ema is None:
+            # Seed the EMA with the first frame so the normaliser is not
+            # blind for the first few seconds of a session.
+            self._ema = [float(v) for v in frame]
+
+        a = self.alpha
+        self._ema = [ema * (1.0 - a) + v * a for ema, v in zip(self._ema, frame)]
+
+        # Silence gate: if the mean raw bar is negligible, keep the lights
+        # dark rather than amplifying noise into meaningless colour flashes.
+        if sum(frame) / n < self.gate:
+            return bytes(n)
+
+        result = bytearray(n)
+        for i, (v, ema) in enumerate(zip(frame, self._ema)):
+            # Guard against a zero EMA (e.g. a bar that has been silent for
+            # the entire session so far).
+            exertion = v / max(ema, 1.0)
+            result[i] = int(min(exertion, self._EXERTION_CLIP) * (255.0 / self._EXERTION_CLIP))
+        return bytes(result)
+
+
 def _band_average(frame: bytes, start: float, end: float) -> float:
     """Average of the bars between two fractional positions (0.0-1.0) in the frame."""
     n = len(frame)
@@ -94,10 +191,22 @@ def frame_to_commands(
 ) -> list[LightColorCommand]:
     """Turn one cava frame into per-channel colour commands.
 
+    *frame* is normally pre-processed by BandNormaliser before reaching
+    here, so bar values encode exertion (relative energy vs. rolling
+    average) rather than raw loudness.  The function itself is stateless
+    and unaware of this distinction; it simply maps bytes to colours.
+
     channel_ids are the Hue Entertainment Area's LightChannel.channel_id
     values - every light in the area gets the same colour for now (a
     per-light spatial mapping, e.g. bass on one side of the room and treble
     on the other, is a natural follow-up but out of scope for v0.1).
+
+    Clipping: each band value is multiplied by profile.sensitivity and
+    clipped to 1.0.  This is the *second* ceiling in the pipeline (the
+    first is BandNormaliser's exertion clip).  With normalised input,
+    sens ≈ 1.0 keeps steady-state music at roughly half-brightness with
+    brief peaks at full; raising sensitivity above ~2.0 pushes the steady
+    state into saturation.  See BandNormaliser for the full picture.
     """
     sens = profile.sensitivity
     floor = profile.brightness_floor
@@ -140,6 +249,7 @@ class SyncEngine:
         self.profile = profile
         self.channel_ids = channel_ids
         self._reader = FifoReader(fifo_path, frame_size=profile.bars)
+        self._normaliser = BandNormaliser()
         self.last_commands: list[LightColorCommand] = []
 
     def start(self) -> None:
@@ -159,7 +269,8 @@ class SyncEngine:
         while True:
             frame = self._reader.latest_frame()
             if frame is not None:
-                commands = frame_to_commands(frame, self.profile, self.channel_ids)
+                normed = self._normaliser.normalise(frame)
+                commands = frame_to_commands(normed, self.profile, self.channel_ids)
                 self.last_commands = commands
                 session.send(commands)
             await asyncio.sleep(SEND_INTERVAL_S)
