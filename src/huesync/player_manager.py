@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from hue_entertainment import EntertainmentSession
@@ -194,12 +195,31 @@ class PlayerManager:
             session.fifo_path.unlink()
         os.mkfifo(session.fifo_path)
 
+    def _wait_for_shm(self, mac: str, timeout: float = 10.0, interval: float = 0.1) -> None:
+        """Wait until squeezelite's shared-memory segment appears in /dev/shm.
+
+        squeezelite creates /dev/shm/squeezelite-<mac> a moment after it
+        starts.  Starting cava before the segment exists causes it to bail out
+        immediately with "Could not open source", which on a brand-new profile
+        looked like cava just silently died.
+        """
+        path = Path(f"/dev/shm/squeezelite-{mac}")
+        deadline = time.monotonic() + timeout
+        while not path.exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"Timed out waiting for squeezelite shared-memory segment {path}"
+                )
+            time.sleep(interval)
+        log.debug("squeezelite SHM segment ready: %s", path)
+
     def _start_cava(self, session: ActiveSession, profile: Profile) -> None:
         binary = shutil.which("cava")
         if not binary:
             raise RuntimeError("cava binary not found on PATH")
 
         mac = profile.player_mac
+        self._wait_for_shm(mac)
         conf = f"""[general]
 bars = {profile.bars}
 
