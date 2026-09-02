@@ -4,8 +4,7 @@ cava writes a continuous stream of `bars` single bytes (0-255) to a FIFO, one
 frame at a time (see player_manager.py for the exact cava config: 8-bit
 binary output). This module reads that FIFO in a background thread (blocking
 file reads don't mix well with asyncio) and converts each frame into Hue
-LightColorCommands, which get pushed onto an asyncio queue for the
-EntertainmentSession to send.
+LightColorCommands, sent to the EntertainmentSession at a fixed rate.
 
 Colour mapping is intentionally simple and tunable (see ColorMode in
 models.py) rather than "clever" - a few honest, readable transforms are
@@ -18,7 +17,6 @@ import asyncio
 import logging
 import os
 import threading
-from collections.abc import Callable
 
 from hue_entertainment import LightColorCommand
 
@@ -28,16 +26,27 @@ log = logging.getLogger(__name__)
 
 MAX_16BIT = 65535
 
+# Hue Entertainment accepts up to ~50 updates/sec; cava can emit frames much
+# faster than that (its rate isn't tied to real playback speed, especially
+# with a "null" ALSA sink that has no hardware clock to pace against). Rather
+# than queueing every frame - which overwhelms the event loop with scheduled
+# callbacks and starves the sender coroutine - the reader thread just keeps
+# the *latest* frame in a lock-protected slot, and the sender polls it at a
+# fixed interval. Old frames are simply superseded, never queued.
+SEND_INTERVAL_S = 1 / 30
+
 
 class FifoReader:
-    """Reads fixed-size frames from cava's raw-output FIFO in a background thread."""
+    """Reads fixed-size frames from cava's raw-output FIFO in a background
+    thread and keeps only the most recent one available for the sender."""
 
-    def __init__(self, fifo_path: str, frame_size: int, on_frame: Callable[[bytes], None]):
+    def __init__(self, fifo_path: str, frame_size: int):
         self.fifo_path = fifo_path
         self.frame_size = frame_size
-        self.on_frame = on_frame
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._latest_frame: bytes | None = None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -48,10 +57,11 @@ class FifoReader:
         if self._thread:
             self._thread.join(timeout=2)
 
+    def latest_frame(self) -> bytes | None:
+        with self._lock:
+            return self._latest_frame
+
     def _run(self) -> None:
-        # Open with O_RDONLY | O_NONBLOCK first so we don't block forever if
-        # cava hasn't started writing yet, then switch to a normal blocking
-        # read loop once the writer side is attached.
         fd = os.open(self.fifo_path, os.O_RDONLY)
         try:
             buf = b""
@@ -59,12 +69,13 @@ class FifoReader:
                 chunk = os.read(fd, 4096)
                 if not chunk:
                     # Writer (cava) closed the pipe - back off briefly and retry.
-                    threading.Event().wait(0.2)
+                    self._stop.wait(0.2)
                     continue
                 buf += chunk
                 while len(buf) >= self.frame_size:
                     frame, buf = buf[: self.frame_size], buf[self.frame_size :]
-                    self.on_frame(frame)
+                    with self._lock:
+                        self._latest_frame = frame
         finally:
             os.close(fd)
 
@@ -122,25 +133,14 @@ def frame_to_commands(
 
 
 class SyncEngine:
-    """Owns one FifoReader + the async send loop into an EntertainmentSession."""
+    """Owns one FifoReader + a fixed-rate async send loop into an
+    EntertainmentSession."""
 
     def __init__(self, fifo_path: str, profile: Profile, channel_ids: list[int]):
         self.profile = profile
         self.channel_ids = channel_ids
-        self._loop = asyncio.get_event_loop()
-        self._queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
-        self._reader = FifoReader(fifo_path, frame_size=profile.bars, on_frame=self._on_frame)
+        self._reader = FifoReader(fifo_path, frame_size=profile.bars)
         self.last_commands: list[LightColorCommand] = []
-
-    def _on_frame(self, frame: bytes) -> None:
-        # Called from the reader thread - hand off to the event loop.
-        # Drop the frame if the queue is full rather than blocking the
-        # reader thread; a dropped visual frame is unnoticeable, a stalled
-        # reader thread causes audible/visible lag build-up.
-        try:
-            self._loop.call_soon_threadsafe(self._queue.put_nowait, frame)
-        except asyncio.QueueFull:
-            pass
 
     def start(self) -> None:
         self._reader.start()
@@ -149,9 +149,17 @@ class SyncEngine:
         self._reader.stop()
 
     async def run(self, session) -> None:  # session: hue_entertainment.EntertainmentSession
-        """Consume frames and push colour commands until cancelled."""
+        """Send the latest available frame at a fixed rate until cancelled.
+
+        Deliberately does NOT try to send every frame cava produces - see
+        the SEND_INTERVAL_S comment above for why that overwhelmed the
+        event loop and starved this very coroutine, silently killing the
+        Entertainment stream via its own idle timeout.
+        """
         while True:
-            frame = await self._queue.get()
-            commands = frame_to_commands(frame, self.profile, self.channel_ids)
-            self.last_commands = commands
-            session.send(commands)
+            frame = self._reader.latest_frame()
+            if frame is not None:
+                commands = frame_to_commands(frame, self.profile, self.channel_ids)
+                self.last_commands = commands
+                session.send(commands)
+            await asyncio.sleep(SEND_INTERVAL_S)
