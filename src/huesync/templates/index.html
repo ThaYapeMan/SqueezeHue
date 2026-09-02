@@ -9,6 +9,9 @@
 
 <section class="card">
   <h2>Hue Bridges</h2>
+    {% if pair_error %}
+    <p class="error">{{ pair_error }}</p>
+  {% endif %}
   {% if bridges %}
     <table>
       <tr><th>Name</th><th>Host</th><th></th></tr>

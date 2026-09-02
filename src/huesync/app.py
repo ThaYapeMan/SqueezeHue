@@ -69,8 +69,25 @@ async def index(request: Request):
 
 
 @app.post("/bridges/pair")
-async def pair_bridge(host: str = Form(...), name: str = Form("Hue Bridge")):
-    bridge = await hue_bridge.pair(host, bridge_name=name)
+async def pair_bridge(request: Request, host: str = Form(...), name: str = Form("Hue Bridge")):
+    try:
+        bridge = await hue_bridge.pair(host, bridge_name=name)
+    except TimeoutError:
+        return templates.TemplateResponse(
+            request,
+            "index.html",
+            {
+                "bridges": storage.list_bridges(),
+                "profiles": storage.list_profiles(),
+                "active_id": player_manager.active_profile_id,
+                "color_modes": list(ColorMode),
+                "pair_error": (
+                    "Pairing timed out. Press the physical link button on the bridge, "
+                    "then submit this form again within ~30 seconds."
+                ),
+            },
+            status_code=400,
+        )
     storage.save_bridge(bridge)
     return RedirectResponse("/", status_code=303)
 

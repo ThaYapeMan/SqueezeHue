@@ -40,6 +40,7 @@ h2 { margin-top: 0; }
 h3 { color: var(--muted); font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.04em; }
 
 .hint { color: var(--muted); font-size: 0.9rem; }
+.error { color: var(--danger); font-size: 0.9rem; background: rgba(229, 72, 77, 0.1); padding: 0.6rem 0.8rem; border-radius: 6px; }
 
 table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
 th, td { text-align: left; padding: 0.5rem 0.4rem; border-bottom: 1px solid var(--border); }
