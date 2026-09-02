@@ -36,6 +36,7 @@ class ActiveSession:
         self.cava: subprocess.Popen | None = None
         self.fifo_path: Path = _RUN_DIR / f"{profile.id}.fifo"
         self.cava_conf_path: Path = _RUN_DIR / f"{profile.id}.conf"
+        self.cava_log_path: Path = _RUN_DIR / f"{profile.id}.cava.log"
         self.sync_engine: SyncEngine | None = None
         self.hue_session: EntertainmentSession | None = None
         self.task: asyncio.Task | None = None
@@ -82,16 +83,30 @@ class PlayerManager:
         session = ActiveSession(profile)
         try:
             self._start_squeezelite(session, profile)
-            self._start_cava(session, profile)
 
             engine = SyncEngine(str(session.fifo_path), profile, channel_ids)
             session.sync_engine = engine
+
+            # Order matters: the FIFO reader must be attached BEFORE cava
+            # starts writing. A FIFO with a writer but no reader delivers
+            # SIGPIPE to the writer, and cava dies immediately - silently,
+            # since we send its output to DEVNULL. Starting the Hue session
+            # first (an 8+ second DTLS handshake) was long enough for cava
+            # to die every single time, which then looked like "the lights
+            # stop after 10 seconds" (the Entertainment idle timeout with
+            # zero frames ever arriving).
+            #
+            # _start_cava() creates the FIFO, so it has to run first, but
+            # the reader thread opens it (blocking until a writer appears)
+            # before cava is spawned.
+            self._create_fifo(session)
+            engine.start()
+            self._start_cava(session, profile)
 
             hue_session = EntertainmentSession(bridge.host, bridge.app_key, bridge.client_key)
             await hue_session.start(profile.entertainment_area_id)
             session.hue_session = hue_session
 
-            engine.start()
             session.task = asyncio.create_task(engine.run(hue_session))
         except Exception:
             # Whatever got started before the failure - squeezelite, cava,
@@ -136,7 +151,7 @@ class PlayerManager:
         for p in (session.fifo_path, session.cava_conf_path):
             p.unlink(missing_ok=True)
 
-        # ALSA output device for the virtual player. This is deliberately NOT
+    # ALSA output device for the virtual player. This is deliberately NOT
     # "null": ALSA's null plugin discards samples the instant they arrive,
     # with no clock to pace against, so squeezelite decodes as fast as the
     # CPU allows - pinning a core at 100% and hammering LMS with stream
@@ -169,14 +184,20 @@ class PlayerManager:
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
 
+    def _create_fifo(self, session: ActiveSession) -> None:
+        """Create the FIFO cava will write to and the reader will read from.
+
+        Split out from _start_cava so the reader can attach to the FIFO
+        before cava starts writing - see the ordering note in activate().
+        """
+        if session.fifo_path.exists():
+            session.fifo_path.unlink()
+        os.mkfifo(session.fifo_path)
+
     def _start_cava(self, session: ActiveSession, profile: Profile) -> None:
         binary = shutil.which("cava")
         if not binary:
             raise RuntimeError("cava binary not found on PATH")
-
-        if session.fifo_path.exists():
-            session.fifo_path.unlink()
-        os.mkfifo(session.fifo_path)
 
         mac = profile.player_mac
         conf = f"""[general]
@@ -194,8 +215,14 @@ bit_format = 8bit
 channels = mono
 """
         session.cava_conf_path.write_text(conf)
+        # Keep cava's stderr instead of discarding it. Debugging why cava
+        # kept dying was needlessly hard because its output went to
+        # DEVNULL - the process just showed up as <defunct> with no clue
+        # why. Its log is small and only written on errors.
+        session.cava_log_path.write_text("")
+        cava_log = session.cava_log_path.open("ab")
         session.cava = subprocess.Popen(
             [binary, "-p", str(session.cava_conf_path)],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=cava_log,
         )
