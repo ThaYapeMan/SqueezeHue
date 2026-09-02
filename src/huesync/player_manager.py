@@ -58,7 +58,12 @@ class PlayerManager:
         return []
 
     async def activate(self, profile: Profile) -> None:
-        """Stop whatever is currently active, then start this profile."""
+        """Stop whatever is currently active, then start this profile.
+
+        Any failure partway through is cleaned up before re-raising, so a
+        failed activation never leaves a leaked squeezelite/cava process
+        behind (see _teardown_session).
+        """
         await self.deactivate()
 
         bridge = self.storage.get_bridge(profile.bridge_id)
@@ -75,18 +80,25 @@ class PlayerManager:
         channel_ids = await get_area_channel_ids(bridge, profile.entertainment_area_id)
 
         session = ActiveSession(profile)
-        self._start_squeezelite(session, profile)
-        self._start_cava(session, profile)
+        try:
+            self._start_squeezelite(session, profile)
+            self._start_cava(session, profile)
 
-        engine = SyncEngine(str(session.fifo_path), profile, channel_ids)
-        session.sync_engine = engine
+            engine = SyncEngine(str(session.fifo_path), profile, channel_ids)
+            session.sync_engine = engine
 
-        hue_session = EntertainmentSession(bridge.host, bridge.app_key, bridge.client_key)
-        await hue_session.start(profile.entertainment_area_id)
-        session.hue_session = hue_session
+            hue_session = EntertainmentSession(bridge.host, bridge.app_key, bridge.client_key)
+            await hue_session.start(profile.entertainment_area_id)
+            session.hue_session = hue_session
 
-        engine.start()
-        session.task = asyncio.create_task(engine.run(hue_session))
+            engine.start()
+            session.task = asyncio.create_task(engine.run(hue_session))
+        except Exception:
+            # Whatever got started before the failure - squeezelite, cava,
+            # the FIFO, a partially-opened Hue session - gets torn down
+            # here instead of leaking.
+            await self._teardown_session(session)
+            raise
 
         self._active = session
         self.storage.set_active_profile_id(profile.id)
@@ -97,7 +109,11 @@ class PlayerManager:
             return
         session = self._active
         self._active = None
+        await self._teardown_session(session)
+        self.storage.set_active_profile_id(None)
+        log.info("Deactivated profile %s", session.profile.name)
 
+    async def _teardown_session(self, session: ActiveSession) -> None:
         if session.task:
             session.task.cancel()
         if session.sync_engine:
@@ -119,9 +135,6 @@ class PlayerManager:
 
         for p in (session.fifo_path, session.cava_conf_path):
             p.unlink(missing_ok=True)
-
-        self.storage.set_active_profile_id(None)
-        log.info("Deactivated profile %s", session.profile.name)
 
     def _start_squeezelite(self, session: ActiveSession, profile: Profile) -> None:
         binary = shutil.which("squeezelite")

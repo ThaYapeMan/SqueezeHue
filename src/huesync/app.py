@@ -156,11 +156,26 @@ async def delete_profile(profile_id: str):
 
 
 @app.post("/profiles/{profile_id}/activate")
-async def activate_profile(profile_id: str):
+async def activate_profile(request: Request, profile_id: str):
     profile = storage.get_profile(profile_id)
     if profile is None:
         return RedirectResponse("/", status_code=303)
-    await player_manager.activate(profile)
+    try:
+        await player_manager.activate(profile)
+    except Exception as exc:  # noqa: BLE001 - surface any activation failure to the GUI
+        log.exception("Failed to activate profile %s", profile.name)
+        return templates.TemplateResponse(
+            request,
+            "index.html",
+            {
+                "bridges": storage.list_bridges(),
+                "profiles": storage.list_profiles(),
+                "active_id": player_manager.active_profile_id,
+                "color_modes": list(ColorMode),
+                "pair_error": f"Could not activate profile '{profile.name}': {exc}",
+            },
+            status_code=400,
+        )
     return RedirectResponse("/", status_code=303)
 
 
