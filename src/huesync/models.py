@@ -81,6 +81,13 @@ class Profile:
     sensitivity: float = 1.0  # multiplier applied to bar values before mapping
     brightness_floor: float = 0.15  # minimum brightness so lights never go fully dark
     bars: int = 30  # number of cava bars analysed (more = finer frequency detail)
+    # Analysed frequency range written into cava's [general] section.
+    # Music has almost no energy above ~12 kHz; cava's default of 22000 Hz
+    # (Nyquist for 44.1 kHz) leaves the top half of the bar frame near zero.
+    # Option names verified against cava 0.10.7 (general:lower_cutoff_freq /
+    # general:higher_cutoff_freq).
+    lower_cutoff_freq: int = 50
+    higher_cutoff_freq: int = 12000
 
     enabled: bool = True
 

@@ -230,15 +230,8 @@ class PlayerManager:
         self._wait_for_shm(mac)
         conf = f"""[general]
 bars = {profile.bars}
-# Restrict the analysed frequency range to where music actually lives.
-# cava's default upper limit is 22000 Hz (Nyquist for 44.1 kHz), but music
-# has almost no energy above ~10-12 kHz. Without an explicit cap, the top
-# half of the bar frame sits near zero permanently, so the "treble" channel
-# never lights up and spectrum_rgb outputs yellow (red + green) at all times.
-# Verified option names against cava 0.10.7 binary (general:lower_cutoff_freq
-# / general:higher_cutoff_freq).
-lower_cutoff_freq = 50
-higher_cutoff_freq = 10000
+lower_cutoff_freq = {profile.lower_cutoff_freq}
+higher_cutoff_freq = {profile.higher_cutoff_freq}
 
 [input]
 method = shmem

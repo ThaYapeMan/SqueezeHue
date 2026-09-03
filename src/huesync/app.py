@@ -124,6 +124,8 @@ async def save_profile(
     sensitivity: float = Form(1.0),
     brightness_floor: float = Form(0.15),
     bars: int = Form(30),
+    lower_cutoff_freq: int = Form(50),
+    higher_cutoff_freq: int = Form(12000),
 ):
     existing = storage.get_profile(profile_id) if profile_id else None
     profile = existing or Profile()
@@ -139,6 +141,8 @@ async def save_profile(
     profile.color_mode = ColorMode(color_mode)
     profile.sensitivity = sensitivity
     profile.brightness_floor = brightness_floor
+    profile.lower_cutoff_freq = lower_cutoff_freq
+    profile.higher_cutoff_freq = higher_cutoff_freq
     profile.bars = bars
     if not profile.player_mac:
         profile.player_mac = generate_locally_administered_mac()
