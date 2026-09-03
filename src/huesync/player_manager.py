@@ -1,6 +1,6 @@
 """Process lifecycle: squeezelite (virtual LMS player) + cava (spectrum
-analysis) + the Hue EntertainmentSession, all tied to whichever Profile is
-currently active.
+analysis) + a HueDriver Entertainment session, all tied to whichever Profile
+is currently active.
 
 Only one profile can be active at a time (a Hue Bridge only supports a
 single Entertainment stream), which this class enforces directly rather
@@ -18,12 +18,12 @@ import tempfile
 import time
 from pathlib import Path
 
-from hue_entertainment import EntertainmentSession
-
-from .hue_bridge import get_area_channel_ids, list_entertainment_areas
+from .hue_bridge import list_entertainment_areas
+from .hue_output import HueDriver, HueOutputConfig, get_channel_infos
 from .models import Profile
 from .storage import Storage
 from .sync_engine import SyncEngine
+from .types import Colour
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class ActiveSession:
         self.cava_conf_path: Path = _RUN_DIR / f"{profile.id}.conf"
         self.cava_log_path: Path = _RUN_DIR / f"{profile.id}.cava.log"
         self.sync_engine: SyncEngine | None = None
-        self.hue_session: EntertainmentSession | None = None
+        self.hue_driver: HueDriver | None = None
         self.task: asyncio.Task | None = None
 
 
@@ -54,9 +54,9 @@ class PlayerManager:
         return self._active.profile.id if self._active else None
 
     @property
-    def last_commands(self):
-        if self._active and self._active.sync_engine:
-            return self._active.sync_engine.last_commands
+    def last_colours(self) -> list[Colour]:
+        if self._active and self._active.hue_driver:
+            return self._active.hue_driver.last_colours
         return []
 
     async def activate(self, profile: Profile) -> None:
@@ -77,15 +77,23 @@ class PlayerManager:
         if area is None:
             raise ValueError("Configured Entertainment Area no longer exists on the bridge")
 
-        # list_entertainment_areas() only returns a summary (light_count);
-        # the real per-light channel_id values must be fetched separately.
-        channel_ids = await get_area_channel_ids(bridge, profile.entertainment_area_id)
+        # Fetch the per-light channel IDs and their spatial positions.
+        # get_channel_infos() supersedes the old get_area_channel_ids(); it
+        # also captures each light's (x, y, z) position so spatial effects
+        # (waves, fireworks, splotches) can use them later.
+        channels = await get_channel_infos(bridge, profile.entertainment_area_id)
+
+        output_config = HueOutputConfig(
+            bridge=bridge,
+            area_id=profile.entertainment_area_id,
+            area_name=area.name,
+        )
 
         session = ActiveSession(profile)
         try:
             self._start_squeezelite(session, profile)
 
-            engine = SyncEngine(str(session.fifo_path), profile, channel_ids)
+            engine = SyncEngine(str(session.fifo_path), profile)
             session.sync_engine = engine
 
             # Order matters: the FIFO reader must be attached BEFORE cava
@@ -104,11 +112,11 @@ class PlayerManager:
             engine.start()
             self._start_cava(session, profile)
 
-            hue_session = EntertainmentSession(bridge.host, bridge.app_key, bridge.client_key)
-            await hue_session.start(profile.entertainment_area_id)
-            session.hue_session = hue_session
+            hue_driver = HueDriver(output_config, channels)
+            await hue_driver.start()
+            session.hue_driver = hue_driver
 
-            session.task = asyncio.create_task(engine.run(hue_session))
+            session.task = asyncio.create_task(engine.run(hue_driver))
         except Exception:
             # Whatever got started before the failure - squeezelite, cava,
             # the FIFO, a partially-opened Hue session - gets torn down
@@ -134,10 +142,10 @@ class PlayerManager:
             session.task.cancel()
         if session.sync_engine:
             session.sync_engine.stop()
-        if session.hue_session:
+        if session.hue_driver:
             try:
-                await session.hue_session.stop()
-                await session.hue_session.aclose()
+                await session.hue_driver.stop()
+                await session.hue_driver.aclose()
             except Exception:  # noqa: BLE001 - best-effort teardown
                 log.exception("Error stopping Hue Entertainment session")
 

@@ -68,21 +68,3 @@ async def list_entertainment_areas(bridge: BridgeConfig) -> list[EntertainmentAr
         EntertainmentAreaInfo(id=a.id, name=a.name, light_count=len(a.channels))
         for a in areas
     ]
-
-
-async def get_area_channel_ids(bridge: BridgeConfig, area_id: str) -> list[int]:
-    """The real per-light channel_id values for one area.
-
-    These are NOT guaranteed to be a simple 0..N-1 range - they come
-    straight from the bridge's own LightChannel definitions - so callers
-    must fetch this instead of assuming a sequential range.
-    """
-    api = HueEntertainmentAPI(bridge.host, app_key=bridge.app_key)
-    try:
-        areas = await api.get_entertainment_areas()
-    finally:
-        await api.close()
-    area = next((a for a in areas if a.id == area_id), None)
-    if area is None:
-        raise ValueError(f"Entertainment area {area_id} not found on bridge")
-    return [c.channel_id for c in area.channels]

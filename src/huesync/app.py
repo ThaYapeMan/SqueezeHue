@@ -193,10 +193,10 @@ async def ws_preview(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            commands = player_manager.last_commands
-            if commands:
-                c = commands[0]
-                await websocket.send_json({"r": c.red, "g": c.green, "b": c.blue})
+            colours = player_manager.last_colours
+            if colours:
+                r, g, b = colours[0].to_16bit()
+                await websocket.send_json({"r": r, "g": g, "b": b})
             else:
                 await websocket.send_json({"r": 0, "g": 0, "b": 0})
             await asyncio.sleep(0.05)

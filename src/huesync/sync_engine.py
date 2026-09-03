@@ -1,14 +1,16 @@
-"""The actual audio -> light pipeline.
+"""The audio analysis and colour engine.
 
-cava writes a continuous stream of `bars` single bytes (0-255) to a FIFO, one
-frame at a time (see player_manager.py for the exact cava config: 8-bit
-binary output). This module reads that FIFO in a background thread (blocking
-file reads don't mix well with asyncio) and converts each frame into Hue
-LightColorCommands, sent to the EntertainmentSession at a fixed rate.
+Signal path (one layer at a time):
 
-Colour mapping is intentionally simple and tunable (see ColorMode in
-models.py) rather than "clever" - a few honest, readable transforms are
-easier to reason about and adjust by ear than a black-box algorithm.
+    FifoReader      — reads cava's raw FIFO output in a background thread
+    BandNormaliser  — AGC: normalises each bar against its own rolling average
+    CavaAnalyser    — wraps the two above; produces AudioFeatures each frame
+    ColourModeEffect— implements Effect; maps AudioFeatures to a Scene using
+                      one of the three legacy ColorMode strategies
+    SyncEngine      — orchestrates Analyser + Effect + Output at 30 Hz
+
+Nothing in this module imports from hue_entertainment; all Hue-specific code
+lives in hue_output.py.
 """
 
 from __future__ import annotations
@@ -17,30 +19,41 @@ import asyncio
 import logging
 import os
 import threading
-
-from hue_entertainment import LightColorCommand
+import time
 
 from .models import ColorMode, Profile
+from .types import (
+    Analyser,
+    AudioFeatures,
+    Colour,
+    Effect,
+    Output,
+    Scene,
+    UniformScene,
+)
 
 log = logging.getLogger(__name__)
 
-MAX_16BIT = 65535
-
 # Hue Entertainment accepts up to ~50 updates/sec; cava can emit frames much
 # faster than that (its rate isn't tied to real playback speed, especially
-# with a "null" ALSA sink that has no hardware clock to pace against). Rather
-# than queueing every frame - which overwhelms the event loop with scheduled
-# callbacks and starves the sender coroutine - the reader thread just keeps
-# the *latest* frame in a lock-protected slot, and the sender polls it at a
-# fixed interval. Old frames are simply superseded, never queued.
+# with a timer-driven ALSA device like snd-dummy).  Rather than queueing every
+# frame — which overwhelms the event loop with scheduled callbacks and starves
+# the sender coroutine — the reader thread keeps the *latest* frame in a
+# lock-protected slot, and the sender polls it at a fixed interval.  Old
+# frames are simply superseded, never queued.
 SEND_INTERVAL_S = 1 / 30
+
+
+# ---------------------------------------------------------------------------
+# FifoReader — background thread that tails cava's FIFO
+# ---------------------------------------------------------------------------
 
 
 class FifoReader:
     """Reads fixed-size frames from cava's raw-output FIFO in a background
     thread and keeps only the most recent one available for the sender."""
 
-    def __init__(self, fifo_path: str, frame_size: int):
+    def __init__(self, fifo_path: str, frame_size: int) -> None:
         self.fifo_path = fifo_path
         self.frame_size = frame_size
         self._stop = threading.Event()
@@ -68,7 +81,7 @@ class FifoReader:
             while not self._stop.is_set():
                 chunk = os.read(fd, 4096)
                 if not chunk:
-                    # Writer (cava) closed the pipe - back off briefly and retry.
+                    # Writer (cava) closed the pipe — back off briefly and retry.
                     self._stop.wait(0.2)
                     continue
                 buf += chunk
@@ -80,6 +93,11 @@ class FifoReader:
             os.close(fd)
 
 
+# ---------------------------------------------------------------------------
+# BandNormaliser — per-band EMA AGC
+# ---------------------------------------------------------------------------
+
+
 class BandNormaliser:
     """Converts raw cava bar values into per-band exertion scores.
 
@@ -89,10 +107,10 @@ class BandNormaliser:
 
         exertion(i) = raw[i] / rolling_average(i)
 
-    A bass line that is always present stops being interesting; it only
-    lights up when it is louder than it usually is.  Mids and treble that
-    were previously drowned out now get equal standing whenever they spike
-    above their own baselines.
+    A band that is always loud stops being interesting; it only lights up
+    when it is louder than it usually is.  Mids and treble that were
+    previously drowned out now get equal standing whenever they spike above
+    their own baselines.
 
     The result is re-encoded as bytes (0-255) so it can be fed straight
     into the existing frame_to_commands() pipeline unchanged:
@@ -108,17 +126,17 @@ class BandNormaliser:
        Raising it makes the output more sensitive to brief spikes;
        lowering it compresses the dynamic range further.
 
-    2. In frame_to_commands(), after multiplying by profile.sensitivity.
-       That clip (at 1.0, just before the 16-bit RGB conversion) is a
-       *safety ceiling*, not a musical choice.
+    2. In ColourModeEffect.render(), after multiplying by profile.sensitivity.
+       That clip (at 1.0, just before the RGB conversion) is a *safety
+       ceiling*, not a musical choice.
 
     These two ceilings interact.  With DEFAULT_ALPHA the normalised output
     hovers around byte 128 (= 0.5 after ÷ 255) during steady music, so
-    sens=1.0 gives roughly half-brightness on average and peaks briefly
-    at full-brightness.  Raising sensitivity above ~2.0 pushes steady-state
+    sens=1.0 gives roughly half-brightness on average and peaks briefly at
+    full-brightness.  Raising sensitivity above ~2.0 pushes steady-state
     output into the upper ceiling and the image becomes uniformly saturated.
-    After this change profile.sensitivity is best treated as a fine-tune
-    around 1.0 rather than the primary loudness driver it was before
+    After the normaliser was added, profile.sensitivity is best treated as a
+    fine-tune around 1.0 rather than the primary loudness driver it was before
     (the normalisation now does that work).
     """
 
@@ -177,8 +195,18 @@ class BandNormaliser:
         return bytes(result)
 
 
+# ---------------------------------------------------------------------------
+# Helpers shared by CavaAnalyser and ColourModeEffect
+# ---------------------------------------------------------------------------
+
+
 def _band_average(frame: bytes, start: float, end: float) -> float:
-    """Average of the bars between two fractional positions (0.0-1.0) in the frame."""
+    """Average of bars in a fractional slice of *frame* (bytes, 0-255 → 0.0-1.0).
+
+    Kept for internal use and for the unit tests that exercise it directly.
+    New code should prefer _slice_avg() which works on the float bar lists
+    produced by CavaAnalyser.
+    """
     n = len(frame)
     lo, hi = int(start * n), max(int(end * n), int(start * n) + 1)
     hi = min(hi, n)
@@ -186,71 +214,37 @@ def _band_average(frame: bytes, start: float, end: float) -> float:
     return (sum(band) / len(band)) / 255.0 if band else 0.0
 
 
-def frame_to_commands(
-    frame: bytes, profile: Profile, channel_ids: list[int]
-) -> list[LightColorCommand]:
-    """Turn one cava frame into per-channel colour commands.
+def _slice_avg(bars: list[float], start: float, end: float) -> float:
+    """Average of a fractional slice of a float bar list (values already 0.0-1.0)."""
+    n = len(bars)
+    lo, hi = int(start * n), max(int(end * n), int(start * n) + 1)
+    hi = min(hi, n)
+    segment = bars[lo:hi]
+    return sum(segment) / len(segment) if segment else 0.0
 
-    *frame* is normally pre-processed by BandNormaliser before reaching
-    here, so bar values encode exertion (relative energy vs. rolling
-    average) rather than raw loudness.  The function itself is stateless
-    and unaware of this distinction; it simply maps bytes to colours.
 
-    channel_ids are the Hue Entertainment Area's LightChannel.channel_id
-    values - every light in the area gets the same colour for now (a
-    per-light spatial mapping, e.g. bass on one side of the room and treble
-    on the other, is a natural follow-up but out of scope for v0.1).
+# ---------------------------------------------------------------------------
+# CavaAnalyser — implements the Analyser protocol
+# ---------------------------------------------------------------------------
 
-    Clipping: each band value is multiplied by profile.sensitivity and
-    clipped to 1.0.  This is the *second* ceiling in the pipeline (the
-    first is BandNormaliser's exertion clip).  With normalised input,
-    sens ≈ 1.0 keeps steady-state music at roughly half-brightness with
-    brief peaks at full; raising sensitivity above ~2.0 pushes the steady
-    state into saturation.  See BandNormaliser for the full picture.
+
+class CavaAnalyser:
+    """Reads cava bar frames from a FIFO, normalises them, and produces
+    AudioFeatures.
+
+    Wraps FifoReader (raw bytes from FIFO) and BandNormaliser (AGC).  The
+    Analyser protocol is satisfied by start(), stop(), and latest().
+
+    AudioFeatures produced here:
+    - bars:     normalised bar values (0.0-1.0)
+    - bass/mid/full: cumulative mel-like band slices (see AudioFeatures docs)
+    - centroid: spectral centroid normalised 0.0-1.0
+    - onset/beat/tempo: not yet computed; always False/None
     """
-    sens = profile.sensitivity
-    floor = profile.brightness_floor
 
-    bass = min(_band_average(frame, 0.0, 0.15) * sens, 1.0)
-    mid = min(_band_average(frame, 0.15, 0.5) * sens, 1.0)
-    treble = min(_band_average(frame, 0.5, 1.0) * sens, 1.0)
-    overall = min(_band_average(frame, 0.0, 1.0) * sens, 1.0)
-
-    if profile.color_mode == ColorMode.SPECTRUM_RGB:
-        r, g, b = bass, mid, treble
-    elif profile.color_mode == ColorMode.BASS_BRIGHTNESS:
-        # Fixed warm hue, brightness driven by bass energy.
-        brightness = max(bass, floor)
-        r, g, b = brightness, brightness * 0.6, brightness * 0.2
-    else:  # MONO_PULSE
-        brightness = max(overall, floor)
-        r = g = b = brightness
-
-    r = max(r, floor if profile.color_mode != ColorMode.SPECTRUM_RGB else 0.0)
-    g = max(g, floor if profile.color_mode != ColorMode.SPECTRUM_RGB else 0.0)
-    b = max(b, floor if profile.color_mode != ColorMode.SPECTRUM_RGB else 0.0)
-
-    red16, green16, blue16 = (
-        int(r * MAX_16BIT),
-        int(g * MAX_16BIT),
-        int(b * MAX_16BIT),
-    )
-    return [
-        LightColorCommand(channel_id=cid, red=red16, green=green16, blue=blue16)
-        for cid in channel_ids
-    ]
-
-
-class SyncEngine:
-    """Owns one FifoReader + a fixed-rate async send loop into an
-    EntertainmentSession."""
-
-    def __init__(self, fifo_path: str, profile: Profile, channel_ids: list[int]):
-        self.profile = profile
-        self.channel_ids = channel_ids
-        self._reader = FifoReader(fifo_path, frame_size=profile.bars)
+    def __init__(self, fifo_path: str, bars: int) -> None:
+        self._reader = FifoReader(fifo_path, frame_size=bars)
         self._normaliser = BandNormaliser()
-        self.last_commands: list[LightColorCommand] = []
 
     def start(self) -> None:
         self._reader.start()
@@ -258,19 +252,123 @@ class SyncEngine:
     def stop(self) -> None:
         self._reader.stop()
 
-    async def run(self, session) -> None:  # session: hue_entertainment.EntertainmentSession
+    def latest(self) -> AudioFeatures | None:
+        frame = self._reader.latest_frame()
+        if frame is None:
+            return None
+        normed = self._normaliser.normalise(frame)
+        n = len(normed)
+        bars = [v / 255.0 for v in normed]
+        total = sum(bars)
+        centroid = (
+            sum(i * v for i, v in enumerate(bars)) / total / n if total > 1e-9 else 0.0
+        )
+        return AudioFeatures(
+            bars=bars,
+            # Cumulative slices: each covers its range plus everything below it.
+            # Proportions are mel-like given cava's log-spaced bars at 50-10000 Hz.
+            bass=_slice_avg(bars, 0.0, 0.20),
+            mid=_slice_avg(bars, 0.0, 0.55),
+            full=_slice_avg(bars, 0.0, 1.0),
+            centroid=centroid,
+            onset=False,
+            onset_strength=0.0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# ColourModeEffect — implements the Effect protocol
+# ---------------------------------------------------------------------------
+
+
+class ColourModeEffect:
+    """The three original ColorMode strategies wrapped as a stateful Effect.
+
+    This is the first and simplest Effect implementation.  It is stateless
+    in the sense that the rendered colour depends only on the current
+    AudioFeatures (no onset cooldown, no palette position, no decay envelope)
+    but it is a *class* rather than a function so future Effects that do need
+    per-session state (onset cooldowns, decay envelopes, palette drift) can
+    follow the same pattern.
+
+    Clipping: each band value is multiplied by profile.sensitivity and clipped
+    to 1.0.  This is the *second* ceiling in the pipeline (the first is
+    BandNormaliser's exertion clip).  With normalised input, sens ≈ 1.0 keeps
+    steady-state music at roughly half-brightness with brief peaks at full;
+    raising sensitivity above ~2.0 pushes the steady state into saturation.
+    See BandNormaliser for the full picture.
+
+    Band proportions: the legacy exclusive splits (0-15 %, 15-50 %, 50-100 %)
+    are preserved here for backwards compatibility with existing profiles.
+    New effects should use the cumulative fields on AudioFeatures instead.
+    """
+
+    def __init__(self, profile: Profile) -> None:
+        self.profile = profile
+
+    def render(self, features: AudioFeatures, t: float) -> Scene:  # noqa: ARG002
+        sens = self.profile.sensitivity
+        floor = self.profile.brightness_floor
+        bars = features.bars
+
+        # Legacy exclusive band proportions — kept to match the original
+        # frame_to_commands() behaviour so existing profiles sound the same.
+        bass = min(_slice_avg(bars, 0.0, 0.15) * sens, 1.0)
+        mid = min(_slice_avg(bars, 0.15, 0.5) * sens, 1.0)
+        treble = min(_slice_avg(bars, 0.5, 1.0) * sens, 1.0)
+        overall = min(_slice_avg(bars, 0.0, 1.0) * sens, 1.0)
+
+        mode = self.profile.color_mode
+        if mode == ColorMode.SPECTRUM_RGB:
+            r, g, b = bass, mid, treble
+        elif mode == ColorMode.BASS_BRIGHTNESS:
+            # Fixed warm hue, brightness driven by bass energy.
+            brightness = max(bass, floor)
+            r, g, b = brightness, brightness * 0.6, brightness * 0.2
+        else:  # MONO_PULSE
+            brightness = max(overall, floor)
+            r = g = b = brightness
+
+        if mode != ColorMode.SPECTRUM_RGB:
+            r = max(r, floor)
+            g = max(g, floor)
+            b = max(b, floor)
+
+        return UniformScene(Colour(r=r, g=g, b=b))
+
+
+# ---------------------------------------------------------------------------
+# SyncEngine — orchestrates Analyser + Effect + Output at 30 Hz
+# ---------------------------------------------------------------------------
+
+
+class SyncEngine:
+    """Owns a CavaAnalyser and a ColourModeEffect; drives them at a fixed rate
+    into whatever Output is passed to run()."""
+
+    def __init__(self, fifo_path: str, profile: Profile) -> None:
+        self.profile = profile
+        self._analyser: Analyser = CavaAnalyser(fifo_path, bars=profile.bars)
+        self._effect: Effect = ColourModeEffect(profile)
+
+    def start(self) -> None:
+        self._analyser.start()
+
+    def stop(self) -> None:
+        self._analyser.stop()
+
+    async def run(self, output: Output) -> None:  # output: hue_output.HueDriver in practice
         """Send the latest available frame at a fixed rate until cancelled.
 
-        Deliberately does NOT try to send every frame cava produces - see
-        the SEND_INTERVAL_S comment above for why that overwhelmed the
-        event loop and starved this very coroutine, silently killing the
-        Entertainment stream via its own idle timeout.
+        Deliberately does NOT try to send every frame cava produces — see the
+        SEND_INTERVAL_S comment above for why that overwhelmed the event loop
+        and starved this very coroutine, silently killing the Entertainment
+        stream via its own idle timeout.
         """
         while True:
-            frame = self._reader.latest_frame()
-            if frame is not None:
-                normed = self._normaliser.normalise(frame)
-                commands = frame_to_commands(normed, self.profile, self.channel_ids)
-                self.last_commands = commands
-                session.send(commands)
+            features = self._analyser.latest()
+            if features is not None:
+                t = time.monotonic()
+                scene: Scene = self._effect.render(features, t)
+                output.send(scene, t)
             await asyncio.sleep(SEND_INTERVAL_S)
