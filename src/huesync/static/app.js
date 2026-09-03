@@ -79,10 +79,10 @@ function editProfile(btn) {
   form.elements["bars"].value = profile.bars ?? 30;
   form.elements["lower_cutoff_freq"].value = profile.lower_cutoff_freq ?? 50;
   form.elements["higher_cutoff_freq"].value = profile.higher_cutoff_freq ?? 12000;
-  if (form.elements["onset_sensitivity"])
-    form.elements["onset_sensitivity"].value = profile.onset_sensitivity ?? 1.5;
-  if (form.elements["onset_cooldown_ms"])
-    form.elements["onset_cooldown_ms"].value = profile.onset_cooldown_ms ?? 120;
+  if (form.elements["onset_delta"])
+    form.elements["onset_delta"].value = profile.onset_delta ?? 0.1;
+  if (form.elements["onset_alpha"])
+    form.elements["onset_alpha"].value = profile.onset_alpha ?? 0.9;
   if (form.elements["light_delay_ms"])
     form.elements["light_delay_ms"].value = profile.light_delay_ms ?? 0;
 

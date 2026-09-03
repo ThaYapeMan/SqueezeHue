@@ -99,13 +99,13 @@ class Profile:
     lower_cutoff_freq: int = 50
     higher_cutoff_freq: int = 12000
 
-    # Onset detection tuning (written into CavaAnalyser at activation).
-    # onset_sensitivity is the k in: onset = flux > mean + k * std_dev.
-    # Higher values = less sensitive (fewer false triggers on hi-hats etc.).
-    onset_sensitivity: float = 1.5
-    # Minimum time between two consecutive onsets.  Prevents a single sharp
-    # transient from triggering multiple onsets across adjacent frames.
-    onset_cooldown_ms: int = 120
+    # Onset detection tuning (Dixon 2006 three-condition peak-picking).
+    # onset_delta: margin above the asymmetric local mean required for condition 2.
+    # Higher values = fewer, more confident onsets.
+    onset_delta: float = 0.1
+    # onset_alpha: per-frame decay of the adaptive suppression threshold (condition 3).
+    # Higher values = longer suppression after a loud onset.  Range 0–1.
+    onset_alpha: float = 0.9
 
     # Output delay.  Positive values delay the light output relative to the
     # analysed audio.  Use this when the audio source (e.g. Sonos) buffers

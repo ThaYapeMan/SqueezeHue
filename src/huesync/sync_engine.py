@@ -200,48 +200,67 @@ class BandNormaliser:
 
 
 # ---------------------------------------------------------------------------
-# OnsetDetector — spectral flux with EMA-based adaptive threshold
+# OnsetDetector — Dixon (2006) three-condition peak-picking
 # ---------------------------------------------------------------------------
 
 
 class OnsetDetector:
-    """Detects musical onsets (note attacks, drum hits) from bar frames.
+    """Detects musical onsets using the peak-picking algorithm from Dixon (2006).
 
-    Spectral flux is the sum of positive differences between the current
-    bar frame and the previous one — it spikes whenever new spectral energy
-    appears suddenly.  A threshold is set dynamically as:
+    Spectral flux is normalised to mean 0, standard deviation 1 via EMA
+    statistics, then a candidate frame is declared an onset only when all
+    three conditions hold simultaneously:
 
-        threshold = mean_flux + k * std_flux
+        1. Local maximum: f(n) >= f(k) for all k in [n-w, n+w]  (w=3)
+        2. Above asymmetric mean: f(n) >= mean(f(k), k in [n-m*w, n+w]) + delta
+           (m=3, so the window looks 3× further back than forward)
+        3. Above decaying threshold: f(n) >= g_alpha(n-1)
+           where g_alpha(n) = max(f(n), alpha*g_alpha(n-1) + (1-alpha)*f(n))
 
-    where mean and std are tracked via separate EMAs on the flux signal.
+    Condition 1 requires looking w frames ahead, so the detector is inherently
+    w frames (~100 ms at 30 Hz) behind real time.  This is irrelevant for
+    lighting.
 
-    After each onset a cooldown suppresses re-triggers for a configurable
-    number of frames, preventing a single loud transient from firing
-    repeatedly (e.g. on every hi-hat beat in a busy bar).
+    Condition 3 replaces the old fixed cooldown: it suppresses re-triggering
+    adaptively — a loud onset raises the bar for longer than a quiet one.
 
-    A warmup period at startup lets the EMA statistics converge before any
-    onset is reported, avoiding spurious triggers on the first few frames.
+    Source: Simon Dixon, "Onset Detection Revisited", DAFx-06.
     """
 
-    #: EMA factor for flux statistics.  0.1 ≈ 300 ms window at 30 Hz.
-    _ALPHA: float = 0.1
+    _W: int = 3    # local-max half-window (frames)
+    _M: int = 3    # asymmetry multiplier for condition 2
+    #: EMA factor for running flux statistics (normalisation).
+    _ALPHA_NORM: float = 0.1
     #: Frames to wait before reporting onsets (lets EMA statistics settle).
     _WARMUP_FRAMES: int = 30
+    #: Ring-buffer size: m*w past frames + candidate + w future frames.
+    _BUF_MAXLEN: int = _M * _W + 1 + _W   # = 13
 
-    def __init__(self, k: float = 1.5, cooldown_frames: int = 4) -> None:
-        self._k = k
-        self._cooldown_frames = cooldown_frames
+    def __init__(self, delta: float = 0.1, alpha: float = 0.9) -> None:
+        self._delta = delta   # condition 2 margin (in normalised-flux units)
+        self._alpha = alpha   # condition 3 decay factor per frame
+
         self._prev_bars: list[float] | None = None
         self._flux_ema: float = 0.0
-        self._flux_var: float = 0.0   # running variance estimate (EMA of squared residuals)
-        self._cooldown: int = 0
+        self._flux_var: float = 0.0
+
+        # Ring buffer of normalised flux values.  Candidate to evaluate is
+        # always at index _M*_W (= 9) — i.e. _W frames behind the newest.
+        self._buf: deque[float] = deque(maxlen=self._BUF_MAXLEN)
+
+        # g_alpha history: maxlen = W+2 so that g_hist[0] at step C+W equals
+        # g_alpha(C-1), which is what condition 3 requires.
+        self._g_hist: deque[float] = deque(
+            [0.0] * (self._W + 2), maxlen=self._W + 2
+        )
+        self._g: float = 0.0
         self._warmup: int = self._WARMUP_FRAMES
 
     def process(self, bars: list[float]) -> tuple[bool, float]:
         """Return *(onset, flux_strength)* for the current bar frame.
 
-        *onset* is True on frames where a new note or beat is detected.
-        *flux_strength* is the raw spectral flux value (unnormalised).
+        *onset* is True on frames where a musical onset is detected.
+        *flux_strength* is the raw (unnormalised) spectral flux for this frame.
         """
         if self._prev_bars is None:
             self._prev_bars = list(bars)
@@ -251,31 +270,50 @@ class OnsetDetector:
         flux = sum(max(0.0, b - p) for b, p in zip(bars, self._prev_bars))
         self._prev_bars = list(bars)
 
-        # Update EMA statistics for mean and variance of flux.
-        # Using the pre-update mean for the residual avoids a bias toward 0.
+        # Running mean and variance for normalisation.  Use pre-update mean so
+        # the residual is unbiased.
         old_ema = self._flux_ema
-        self._flux_ema = old_ema + self._ALPHA * (flux - old_ema)
-        self._flux_var = self._flux_var + self._ALPHA * (
+        self._flux_ema = old_ema + self._ALPHA_NORM * (flux - old_ema)
+        self._flux_var = self._flux_var + self._ALPHA_NORM * (
             (flux - old_ema) ** 2 - self._flux_var
         )
         flux_std = math.sqrt(max(self._flux_var, 0.0))
 
-        # Suppress onsets until the EMA has had enough frames to warm up.
+        # Normalise to mean 0, std 1.
+        f_norm = (flux - old_ema) / max(flux_std, 1e-6)
+
+        # Read g_alpha(C-1) before updating, then advance the history.
+        g_prev = self._g_hist[0]
+        self._g = max(f_norm, self._alpha * self._g + (1.0 - self._alpha) * f_norm)
+        self._g_hist.append(self._g)
+
+        self._buf.append(f_norm)
+
         if self._warmup > 0:
             self._warmup -= 1
             return False, flux
 
-        # Honour cooldown: don't fire again until the countdown reaches zero.
-        if self._cooldown > 0:
-            self._cooldown -= 1
+        if len(self._buf) < self._BUF_MAXLEN:
             return False, flux
 
-        threshold = self._flux_ema + self._k * max(flux_std, 1e-6)
-        onset = flux > threshold
-        if onset:
-            self._cooldown = self._cooldown_frames
+        buf = list(self._buf)
+        ci = self._M * self._W   # candidate index = 9
+        f_c = buf[ci]
 
-        return onset, flux
+        # Condition 1: local maximum within ±w.
+        w = self._W
+        if any(f_c < buf[ci + k] for k in range(-w, w + 1) if k != 0):
+            return False, flux
+
+        # Condition 2: above asymmetric local mean + delta (window = entire buf).
+        if f_c < sum(buf) / len(buf) + self._delta:
+            return False, flux
+
+        # Condition 3: above decaying threshold from previous onset.
+        if f_c < g_prev:
+            return False, flux
+
+        return True, flux
 
 
 # ---------------------------------------------------------------------------
@@ -332,13 +370,12 @@ class CavaAnalyser:
         self,
         fifo_path: str,
         bars: int,
-        onset_sensitivity: float = 1.5,
-        onset_cooldown_ms: float = 120.0,
+        onset_delta: float = 0.1,
+        onset_alpha: float = 0.9,
     ) -> None:
         self._reader = FifoReader(fifo_path, frame_size=bars)
         self._normaliser = BandNormaliser()
-        cooldown_frames = max(1, round(onset_cooldown_ms / 1000.0 / SEND_INTERVAL_S))
-        self._onset = OnsetDetector(k=onset_sensitivity, cooldown_frames=cooldown_frames)
+        self._onset = OnsetDetector(delta=onset_delta, alpha=onset_alpha)
 
     def start(self) -> None:
         self._reader.start()
@@ -462,8 +499,8 @@ class SyncEngine:
         self._analyser: Analyser = CavaAnalyser(
             fifo_path,
             bars=profile.bars,
-            onset_sensitivity=profile.onset_sensitivity,
-            onset_cooldown_ms=profile.onset_cooldown_ms,
+            onset_delta=profile.onset_delta,
+            onset_alpha=profile.onset_alpha,
         )
         self._effect: Effect = ColourModeEffect(profile)
         self._delay_frames = max(0, round(profile.light_delay_ms / 1000.0 / SEND_INTERVAL_S))

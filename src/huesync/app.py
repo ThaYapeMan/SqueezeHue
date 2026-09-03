@@ -147,8 +147,8 @@ async def save_profile(
     bars: int = Form(30),
     lower_cutoff_freq: int = Form(50),
     higher_cutoff_freq: int = Form(12000),
-    onset_sensitivity: float = Form(1.5),
-    onset_cooldown_ms: int = Form(120),
+    onset_delta: float = Form(0.1),
+    onset_alpha: float = Form(0.9),
     light_delay_ms: int = Form(0),
 ):
     existing = storage.get_profile(profile_id) if profile_id else None
@@ -167,8 +167,8 @@ async def save_profile(
     profile.brightness_floor = brightness_floor
     profile.lower_cutoff_freq = lower_cutoff_freq
     profile.higher_cutoff_freq = higher_cutoff_freq
-    profile.onset_sensitivity = onset_sensitivity
-    profile.onset_cooldown_ms = onset_cooldown_ms
+    profile.onset_delta = onset_delta
+    profile.onset_alpha = onset_alpha
     profile.light_delay_ms = light_delay_ms
     profile.bars = bars
     if not profile.player_mac:

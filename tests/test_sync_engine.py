@@ -168,78 +168,109 @@ def test_normaliser_ema_still_updates_during_silence():
 
 
 # ---------------------------------------------------------------------------
-# OnsetDetector
+# OnsetDetector — Dixon (2006) three-condition peak-picking
 # ---------------------------------------------------------------------------
 
 
-def _warm_up(detector: OnsetDetector, bars: list[float], frames: int = 50) -> None:
-    """Run the detector for *frames* frames to get past the warmup period."""
+def _warm_up_onset(detector: OnsetDetector, bars: list[float], frames: int = 50) -> None:
+    """Feed *frames* frames to get past the warmup period and fill the buffer."""
     for _ in range(frames):
         detector.process(bars)
 
 
+def _alternating_warm_up(detector: OnsetDetector, n_bars: int = 30, pairs: int = 60) -> None:
+    """Alternate between two bar levels so the EMA settles at a non-trivial level.
+
+    Ends on the high bars ([0.6]*n_bars) so the test sequence can start from there.
+    """
+    lo = [0.3] * n_bars
+    hi = [0.6] * n_bars
+    for _ in range(pairs):
+        detector.process(lo)
+        detector.process(hi)
+
+
 def test_onset_no_trigger_during_warmup():
     """No onset should fire during the warmup period regardless of flux."""
-    detector = OnsetDetector(k=0.0, cooldown_frames=0)  # maximally sensitive
+    detector = OnsetDetector(delta=0.0, alpha=0.0)  # maximally sensitive
     bars = [1.0] * 30
-    # First call initialises prev_bars; second call has large flux but is still
-    # in warmup.  Warmup is 30 frames; check the first 31.
+    # Warmup is 30 frames; constant bars produce zero flux, so no onset fires.
     for _ in range(31):
         onset, _ = detector.process(bars)
         assert not onset, "Onset fired during warmup"
 
 
 def test_onset_triggers_on_sudden_spike():
-    """After warmup, a sudden spike in spectral energy should trigger an onset."""
-    detector = OnsetDetector(k=1.0, cooldown_frames=0)
-    silence = [0.0] * 30
-    loud = [1.0] * 30
-    _warm_up(detector, silence, frames=50)
-    # Feed a few more silent frames to stabilise the EMA.
-    for _ in range(20):
-        detector.process(silence)
-    # Now a sudden full-scale spike.
-    onset, strength = detector.process(loud)
-    assert onset, f"Expected onset on spike, got False (strength={strength:.3f})"
+    """After warmup, a large flux spike triggers an onset within w+1 frames."""
+    w = OnsetDetector._W
+    detector = OnsetDetector(delta=0.1, alpha=0.0)
+    n_bars = 30
+    _alternating_warm_up(detector, n_bars)
+    # Feed a spike from [0.6] to [1.0] followed by w fall-back frames.
+    # The spike becomes the candidate w frames later; the falling frames confirm
+    # it is a local maximum and give the detector its lookahead.
+    spike_bars = [1.0] * n_bars
+    hi_bars = [0.6] * n_bars
+    frames = [spike_bars] + [hi_bars] * w
+    onset_fired = any(detector.process(f)[0] for f in frames)
+    assert onset_fired, f"Expected onset within {w + 1} frames of spike"
 
 
-def test_onset_cooldown_suppresses_rapid_retrigger():
-    """After an onset, the cooldown must prevent immediately re-triggering."""
-    cooldown = 5
-    detector = OnsetDetector(k=0.5, cooldown_frames=cooldown)
-    silence = [0.0] * 30
-    loud = [1.0] * 30
-    _warm_up(detector, silence, frames=50)
-    for _ in range(20):
-        detector.process(silence)
+def test_onset_fires_at_peak_not_rising_edge():
+    """Dixon condition 1: onset fires at the flux peak, not on the rising edge.
 
-    # Trigger the first onset.
-    detector.process(loud)
+    A gradual rise followed by a single large jump then a fall must produce
+    exactly one onset, timed to the large jump (the true local maximum), not to
+    any frame on the rising slope.  alpha=0.0 disables condition 3 so this test
+    isolates conditions 1 and 2.
+    """
+    w = OnsetDetector._W  # 3
+    detector = OnsetDetector(delta=0.1, alpha=0.0)
+    n_bars = 30
+    _alternating_warm_up(detector, n_bars)
 
-    # The next `cooldown` frames must not produce an onset even with loud input.
-    for i in range(cooldown):
-        onset, _ = detector.process(loud)
-        assert not onset, f"Onset re-triggered during cooldown at frame {i}"
+    # Bar sequence starting from [0.6] (last warmup level).
+    # Flux per step = 30 * max(0, new_level - prev_level).
+    bar_sequence = [
+        [0.65] * n_bars,  # step 0: flux = 1.5  (rising edge)
+        [0.70] * n_bars,  # step 1: flux = 1.5  (rising edge)
+        [0.75] * n_bars,  # step 2: flux = 1.5  (rising edge)
+        [1.00] * n_bars,  # step 3: flux = 7.5  ← PEAK
+        [0.95] * n_bars,  # step 4: flux = 0    (falling)
+        [0.80] * n_bars,  # step 5: flux = 0    (falling)
+        [0.60] * n_bars,  # step 6: flux = 0    ← onset fires here (peak + w)
+        [0.40] * n_bars,  # step 7: flux = 0
+        [0.20] * n_bars,  # step 8: flux = 0
+    ]
+
+    onsets = [step for step, bars in enumerate(bar_sequence) if detector.process(bars)[0]]
+
+    assert len(onsets) == 1, f"Expected 1 onset, got {len(onsets)} at steps {onsets}"
+    assert onsets[0] == 3 + w, (
+        f"Expected onset at step {3 + w} (peak index 3 + lookahead w={w}), "
+        f"got step {onsets[0]}"
+    )
 
 
-def test_onset_resumes_after_cooldown():
-    """After the cooldown expires, a new spike should be detectable again."""
-    cooldown = 3
-    detector = OnsetDetector(k=0.5, cooldown_frames=cooldown)
-    silence = [0.0] * 30
-    loud = [1.0] * 30
-    _warm_up(detector, silence, frames=50)
-    for _ in range(20):
-        detector.process(silence)
+def test_onset_no_trigger_on_slow_rise():
+    """A monotonically rising sequence with constant flux has no local maximum.
 
-    # First onset + drain cooldown with silence (so EMA stays low).
-    detector.process(loud)
-    for _ in range(cooldown + 1):
-        detector.process(silence)
+    Condition 2 (above local mean + delta) also fails because every frame's
+    normalised flux is identical — none exceeds the window mean by delta > 0.
+    """
+    detector = OnsetDetector(delta=0.1, alpha=0.0)
+    n_bars = 30
+    _alternating_warm_up(detector, n_bars)
 
-    # A new spike should now trigger.
-    onset, strength = detector.process(loud)
-    assert onset, f"Expected onset after cooldown, got False (strength={strength:.3f})"
+    # Linear rise from 0.6 to 1.0 in 20 equal steps: constant flux ≈ 0.6/20 * 30.
+    any_onset = False
+    for step in range(20):
+        level = 0.6 + (step + 1) * 0.4 / 20
+        onset, _ = detector.process([level] * n_bars)
+        if onset:
+            any_onset = True
+
+    assert not any_onset, "Expected no onset on monotonically rising flux"
 
 
 def test_onset_strength_positive_on_rising_energy():
