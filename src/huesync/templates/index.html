@@ -7,9 +7,15 @@
   <p class="hint">Shows the colour currently being sent to the active profile's first light channel.</p>
 </section>
 
+{% if request.query_params.get("info") %}
+<section class="card">
+  <p class="info">{{ request.query_params.get("info") }}</p>
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Hue Bridges</h2>
-    {% if pair_error %}
+  {% if pair_error %}
     <p class="error">{{ pair_error }}</p>
   {% endif %}
   {% if bridges %}
@@ -42,7 +48,7 @@
 
 <section class="card">
   <h2>Profiles</h2>
-  <p class="hint">Only one profile can be active at a time per bridge - the Hue Bridge itself only supports a single Entertainment stream.</p>
+  <p class="hint">Only one profile can be active at a time per bridge — the Hue Bridge itself only supports a single Entertainment stream.</p>
 
   {% if profiles %}
   <table>
@@ -69,7 +75,11 @@
             <button type="submit">Activate</button>
           </form>
         {% endif %}
-        <form method="post" action="/profiles/{{ p.id }}/delete" onsubmit="return confirm('Delete profile {{ p.name }}?')">
+        <button type="button" class="secondary"
+                data-profile='{{ p.to_dict() | tojson }}'
+                onclick="editProfile(this)">Edit</button>
+        <form method="post" action="/profiles/{{ p.id }}/delete"
+              onsubmit="return confirm('Delete profile {{ p.name }}?')">
           <button type="submit" class="danger">Delete</button>
         </form>
       </td>
@@ -80,16 +90,22 @@
     <p class="hint">No profiles yet.</p>
   {% endif %}
 
-  <h3>New profile</h3>
+  <h3 id="form-heading">New profile</h3>
   {% if not bridges %}
     <p class="hint">Pair a bridge first.</p>
   {% else %}
   <form method="post" action="/profiles" id="profile-form">
+    <input type="hidden" name="profile_id" id="profile-id" value="">
+
     <label>Name <input type="text" name="name" placeholder="Living room" required></label>
 
     <fieldset>
       <legend>Lyrion Music Server</legend>
-      <label>LMS host <input type="text" name="lms_host" placeholder="192.168.178.23" required></label>
+      <div class="input-row">
+        <label>LMS host <input type="text" name="lms_host" placeholder="192.168.178.23" required></label>
+        <button type="button" id="discover-lms-btn" onclick="discoverLms()">Discover</button>
+      </div>
+      <p class="hint">Discover finds servers on the same subnet only.</p>
       <label>LMS port <input type="number" name="lms_port" value="3483"></label>
       <label>Virtual player name <input type="text" name="player_name" placeholder="HueSync" value="HueSync" required></label>
     </fieldset>
@@ -125,7 +141,10 @@
       <label>Higher cutoff (Hz) <input type="number" name="higher_cutoff_freq" value="12000" min="1000" max="22000"></label>
     </fieldset>
 
-    <button type="submit">Save profile</button>
+    <div class="form-actions">
+      <button type="submit">Save profile</button>
+      <button type="button" id="cancel-edit" onclick="cancelEdit()" style="display:none">Cancel edit</button>
+    </div>
   </form>
   {% endif %}
 </section>

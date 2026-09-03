@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import hue_bridge
+from .lms_discovery import discover_lms
 from .models import ColorMode, Profile
 from .player_manager import PlayerManager
 from .storage import Storage
@@ -98,6 +99,26 @@ async def delete_bridge(bridge_id: str):
     return RedirectResponse("/", status_code=303)
 
 
+@app.get("/lms/discover")
+async def lms_discover():
+    """Discover Lyrion Music Servers on the local network via UDP broadcast.
+
+    Only finds servers on the same subnet.  Returns a list of objects with
+    host, name, json_port, uuid, and version fields.
+    """
+    servers = await discover_lms(timeout=3.0)
+    return [
+        {
+            "host": s.host,
+            "name": s.name,
+            "json_port": s.json_port,
+            "uuid": s.uuid,
+            "version": s.version,
+        }
+        for s in servers
+    ]
+
+
 @app.get("/bridges/{bridge_id}/areas")
 async def bridge_areas(bridge_id: str):
     bridge = storage.get_bridge(bridge_id)
@@ -147,7 +168,20 @@ async def save_profile(
     if not profile.player_mac:
         profile.player_mac = generate_locally_administered_mac()
 
+    # If this profile was active, deactivate it before saving so the running
+    # processes are not left with stale config.  The user must reactivate it
+    # manually; we never silently restart so they can choose the right moment.
+    was_active = bool(profile_id and player_manager.active_profile_id == profile_id)
+    if was_active:
+        await player_manager.deactivate()
+
     storage.save_profile(profile)
+
+    if was_active:
+        return RedirectResponse(
+            "/?info=Profile+saved.+It+was+deactivated%3B+reactivate+it+to+apply+the+changes.",
+            status_code=303,
+        )
     return RedirectResponse("/", status_code=303)
 
 
