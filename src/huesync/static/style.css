@@ -56,8 +56,21 @@ th { color: var(--muted); font-weight: 500; font-size: 0.85rem; }
 }
 .badge.active { background: rgba(124, 92, 255, 0.2); color: var(--accent); }
 
-.actions { display: flex; gap: 0.5rem; }
-.actions form { display: inline; }
+/* Profile table action cell: all buttons on one baseline */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.actions form {
+  display: contents; /* form element doesn't participate in flex layout */
+}
+.actions button {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  align-self: auto;
+}
 
 form { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; }
@@ -90,10 +103,15 @@ button.secondary:hover { background: #363c47; }
 
 .info { color: #7ec8a0; font-size: 0.9rem; background: rgba(126, 200, 160, 0.1); padding: 0.6rem 0.8rem; border-radius: 6px; }
 
-/* LMS host row: input + Discover button side by side */
-.input-row { display: flex; gap: 0.5rem; align-items: flex-end; }
-.input-row label { flex: 1; }
-.input-row button { white-space: nowrap; margin-bottom: 0; }
+/* Input + button on the same row (e.g. LMS host + Discover).
+   The label sits above the row and the hint below it, both full-width. */
+.field-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.field-row input { flex: 1; }
+.field-row button { white-space: nowrap; flex-shrink: 0; align-self: auto; }
 
 .form-actions { display: flex; gap: 0.75rem; }
 
@@ -103,5 +121,7 @@ button.secondary:hover { background: #363c47; }
   border-radius: 8px;
   background: #000;
   border: 1px solid var(--border);
-  transition: background-color 0.08s linear;
+  transition: background-color 0.08s linear, outline 0.04s linear;
+  outline: 3px solid transparent;
 }
+.swatch.onset { outline-color: white; }

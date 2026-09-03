@@ -6,20 +6,25 @@ whole config can live in one human-readable, git-diffable file.
 
 from __future__ import annotations
 
+import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
+
+log = logging.getLogger(__name__)
 
 
 class ColorMode(StrEnum):
-    """How cava's spectrum bars are translated into a Hue colour."""
+    """How cava's spectrum bars are translated into a Hue colour.
 
-    # Low bars (bass) drive brightness, average spectrum position drives hue.
-    BASS_BRIGHTNESS = "bass_brightness"
-    # Whole spectrum is split in three bands (bass/mid/treble) mapped to R/G/B.
+    bass_brightness was removed: it was a poorly behaved legacy mode that
+    mapped bass energy to a fixed warm hue.  Profiles that stored it are
+    migrated to spectrum_rgb on load (see Profile.from_dict).
+    """
+
+    # Whole spectrum split in three bands (bass/mid/treble) mapped to R/G/B.
     SPECTRUM_RGB = "spectrum_rgb"
-    # Single colour, brightness only follows overall loudness. Good for a
-    # calmer "mood lighting" feel instead of a full disco effect.
+    # Single colour; brightness follows overall loudness.
     MONO_PULSE = "mono_pulse"
 
 
@@ -45,6 +50,11 @@ class BridgeConfig:
     @classmethod
     def from_dict(cls, d: dict) -> BridgeConfig:
         return cls(**d)
+
+
+#: Profile field names as a set — used to strip unknown keys when loading old
+#: or future config files so cls(**d) never receives unexpected kwargs.
+_PROFILE_FIELDS: frozenset[str] = frozenset()  # filled after class definition
 
 
 @dataclass
@@ -80,7 +90,7 @@ class Profile:
     color_mode: ColorMode = ColorMode.SPECTRUM_RGB
     sensitivity: float = 1.0  # multiplier applied to bar values before mapping
     brightness_floor: float = 0.15  # minimum brightness so lights never go fully dark
-    bars: int = 30  # number of cava bars analysed (more = finer frequency detail)
+    bars: int = 30  # number of cava bars (more = finer frequency detail)
     # Analysed frequency range written into cava's [general] section.
     # Music has almost no energy above ~12 kHz; cava's default of 22000 Hz
     # (Nyquist for 44.1 kHz) leaves the top half of the bar frame near zero.
@@ -88,6 +98,20 @@ class Profile:
     # general:higher_cutoff_freq).
     lower_cutoff_freq: int = 50
     higher_cutoff_freq: int = 12000
+
+    # Onset detection tuning (written into CavaAnalyser at activation).
+    # onset_sensitivity is the k in: onset = flux > mean + k * std_dev.
+    # Higher values = less sensitive (fewer false triggers on hi-hats etc.).
+    onset_sensitivity: float = 1.5
+    # Minimum time between two consecutive onsets.  Prevents a single sharp
+    # transient from triggering multiple onsets across adjacent frames.
+    onset_cooldown_ms: int = 120
+
+    # Output delay.  Positive values delay the light output relative to the
+    # analysed audio.  Use this when the audio source (e.g. Sonos) buffers
+    # significantly and the lights arrive before the sound does.
+    # Implemented as a ring buffer in SyncEngine; range 0-3000 ms.
+    light_delay_ms: int = 0
 
     enabled: bool = True
 
@@ -99,6 +123,24 @@ class Profile:
     @classmethod
     def from_dict(cls, d: dict) -> Profile:
         d = dict(d)
+
+        # Migrate removed color modes to a safe default.
         if "color_mode" in d:
-            d["color_mode"] = ColorMode(d["color_mode"])
+            try:
+                d["color_mode"] = ColorMode(d["color_mode"])
+            except ValueError:
+                log.warning(
+                    "Unsupported color_mode %r in saved profile; falling back to spectrum_rgb",
+                    d["color_mode"],
+                )
+                d["color_mode"] = ColorMode.SPECTRUM_RGB
+
+        # Strip keys that are not current Profile fields so that loading a
+        # config written by a newer version of HueSync never causes a
+        # TypeError, and loading a config with removed fields is harmless.
+        d = {k: v for k, v in d.items() if k in _PROFILE_FIELDS}
+
         return cls(**d)
+
+
+_PROFILE_FIELDS = frozenset(f.name for f in fields(Profile))

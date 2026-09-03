@@ -4,7 +4,7 @@
 <section class="card">
   <h2>Live preview</h2>
   <div id="preview-swatch" class="swatch"></div>
-  <p class="hint">Shows the colour currently being sent to the active profile's first light channel.</p>
+  <p class="hint">Colour of the first light channel. White outline = onset detected.</p>
 </section>
 
 {% if request.query_params.get("info") %}
@@ -26,7 +26,8 @@
         <td>{{ b.name }}</td>
         <td>{{ b.host }}</td>
         <td>
-          <form method="post" action="/bridges/{{ b.id }}/delete" onsubmit="return confirm('Remove this bridge? Profiles referencing it will stop working.')">
+          <form method="post" action="/bridges/{{ b.id }}/delete"
+                onsubmit="return confirm('Remove this bridge? Profiles referencing it will stop working.')">
             <button type="submit" class="danger">Remove</button>
           </form>
         </td>
@@ -48,7 +49,7 @@
 
 <section class="card">
   <h2>Profiles</h2>
-  <p class="hint">Only one profile can be active at a time per bridge — the Hue Bridge itself only supports a single Entertainment stream.</p>
+  <p class="hint">Only one profile can be active at a time per bridge — the Hue Bridge only supports a single Entertainment stream.</p>
 
   {% if profiles %}
   <table>
@@ -57,7 +58,7 @@
     <tr>
       <td>{{ p.name }}</td>
       <td>{{ p.entertainment_area_name or p.entertainment_area_id }}</td>
-      <td>{{ p.color_mode.value }}</td>
+      <td>{{ p.color_mode.value | replace("_", " ") | title }}</td>
       <td>
         {% if p.id == active_id %}
           <span class="badge active">Active</span>
@@ -101,8 +102,9 @@
 
     <fieldset>
       <legend>Lyrion Music Server</legend>
-      <div class="input-row">
-        <label>LMS host <input type="text" name="lms_host" placeholder="192.168.178.23" required></label>
+      <label>LMS host</label>
+      <div class="field-row">
+        <input type="text" name="lms_host" placeholder="192.168.178.23" required>
         <button type="button" id="discover-lms-btn" onclick="discoverLms()">Discover</button>
       </div>
       <p class="hint">Discover finds servers on the same subnet only.</p>
@@ -130,7 +132,7 @@
       <label>Mode
         <select name="color_mode">
           {% for m in color_modes %}
-            <option value="{{ m.value }}">{{ m.value }}</option>
+            <option value="{{ m.value }}">{{ m.value | replace("_", " ") | title }}</option>
           {% endfor %}
         </select>
       </label>
@@ -139,6 +141,19 @@
       <label>Spectrum bars <input type="number" name="bars" value="30"></label>
       <label>Lower cutoff (Hz) <input type="number" name="lower_cutoff_freq" value="50" min="20" max="500"></label>
       <label>Higher cutoff (Hz) <input type="number" name="higher_cutoff_freq" value="12000" min="1000" max="22000"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Onset detection</legend>
+      <label>Sensitivity (k) <input type="number" step="0.1" min="0.5" max="5" name="onset_sensitivity" value="1.5"></label>
+      <p class="hint">Higher = fewer triggers. Default 1.5.</p>
+      <label>Cooldown (ms) <input type="number" step="10" min="0" max="500" name="onset_cooldown_ms" value="120"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Output timing</legend>
+      <label>Light delay (ms) <input type="number" step="10" min="0" max="3000" name="light_delay_ms" value="0"></label>
+      <p class="hint">Delays light output relative to audio. Use when lights arrive before the sound (e.g. Sonos buffers 1–2 s).</p>
     </fieldset>
 
     <div class="form-actions">

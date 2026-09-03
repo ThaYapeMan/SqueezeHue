@@ -1,5 +1,5 @@
 from huesync.models import ColorMode, Profile
-from huesync.sync_engine import BandNormaliser, ColourModeEffect, _band_average
+from huesync.sync_engine import BandNormaliser, ColourModeEffect, OnsetDetector, _band_average
 from huesync.types import AudioFeatures, Position
 
 
@@ -50,7 +50,7 @@ def test_band_average_full_scale():
 
 
 # ---------------------------------------------------------------------------
-# ColourModeEffect
+# ColourModeEffect — two modes remaining after bass_brightness removal
 # ---------------------------------------------------------------------------
 
 
@@ -165,3 +165,98 @@ def test_normaliser_ema_still_updates_during_silence():
 
     # EMA should have decayed toward 0 during silence, not stayed frozen.
     assert all(a < b for a, b in zip(ema_after_silence, ema_after_loud))
+
+
+# ---------------------------------------------------------------------------
+# OnsetDetector
+# ---------------------------------------------------------------------------
+
+
+def _warm_up(detector: OnsetDetector, bars: list[float], frames: int = 50) -> None:
+    """Run the detector for *frames* frames to get past the warmup period."""
+    for _ in range(frames):
+        detector.process(bars)
+
+
+def test_onset_no_trigger_during_warmup():
+    """No onset should fire during the warmup period regardless of flux."""
+    detector = OnsetDetector(k=0.0, cooldown_frames=0)  # maximally sensitive
+    bars = [1.0] * 30
+    # First call initialises prev_bars; second call has large flux but is still
+    # in warmup.  Warmup is 30 frames; check the first 31.
+    for _ in range(31):
+        onset, _ = detector.process(bars)
+        assert not onset, "Onset fired during warmup"
+
+
+def test_onset_triggers_on_sudden_spike():
+    """After warmup, a sudden spike in spectral energy should trigger an onset."""
+    detector = OnsetDetector(k=1.0, cooldown_frames=0)
+    silence = [0.0] * 30
+    loud = [1.0] * 30
+    _warm_up(detector, silence, frames=50)
+    # Feed a few more silent frames to stabilise the EMA.
+    for _ in range(20):
+        detector.process(silence)
+    # Now a sudden full-scale spike.
+    onset, strength = detector.process(loud)
+    assert onset, f"Expected onset on spike, got False (strength={strength:.3f})"
+
+
+def test_onset_cooldown_suppresses_rapid_retrigger():
+    """After an onset, the cooldown must prevent immediately re-triggering."""
+    cooldown = 5
+    detector = OnsetDetector(k=0.5, cooldown_frames=cooldown)
+    silence = [0.0] * 30
+    loud = [1.0] * 30
+    _warm_up(detector, silence, frames=50)
+    for _ in range(20):
+        detector.process(silence)
+
+    # Trigger the first onset.
+    detector.process(loud)
+
+    # The next `cooldown` frames must not produce an onset even with loud input.
+    for i in range(cooldown):
+        onset, _ = detector.process(loud)
+        assert not onset, f"Onset re-triggered during cooldown at frame {i}"
+
+
+def test_onset_resumes_after_cooldown():
+    """After the cooldown expires, a new spike should be detectable again."""
+    cooldown = 3
+    detector = OnsetDetector(k=0.5, cooldown_frames=cooldown)
+    silence = [0.0] * 30
+    loud = [1.0] * 30
+    _warm_up(detector, silence, frames=50)
+    for _ in range(20):
+        detector.process(silence)
+
+    # First onset + drain cooldown with silence (so EMA stays low).
+    detector.process(loud)
+    for _ in range(cooldown + 1):
+        detector.process(silence)
+
+    # A new spike should now trigger.
+    onset, strength = detector.process(loud)
+    assert onset, f"Expected onset after cooldown, got False (strength={strength:.3f})"
+
+
+def test_onset_strength_positive_on_rising_energy():
+    """Flux strength must be > 0 when energy rises."""
+    detector = OnsetDetector()
+    bars_low = [0.1] * 30
+    bars_high = [0.9] * 30
+    detector.process(bars_low)  # initialise prev
+    _, strength = detector.process(bars_high)
+    assert strength > 0.0
+
+
+def test_onset_strength_zero_on_falling_energy():
+    """Flux is one-sided (positive differences only), so falling energy → 0."""
+    detector = OnsetDetector()
+    bars_high = [0.9] * 30
+    bars_low = [0.1] * 30
+    detector.process(bars_high)
+    _, strength = detector.process(bars_low)
+    assert strength == 0.0

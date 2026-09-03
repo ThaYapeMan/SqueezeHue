@@ -59,6 +59,18 @@ class PlayerManager:
             return self._active.hue_driver.last_colours
         return []
 
+    @property
+    def last_onset(self) -> bool:
+        """True if the most recently analysed frame contained a detected onset.
+
+        Reflects the raw detection result without any output delay applied,
+        so the GUI can show onset flashes in sync with the audio rather than
+        with the delayed light output.
+        """
+        if self._active and self._active.sync_engine:
+            return self._active.sync_engine.last_onset
+        return False
+
     async def activate(self, profile: Profile) -> None:
         """Stop whatever is currently active, then start this profile.
 

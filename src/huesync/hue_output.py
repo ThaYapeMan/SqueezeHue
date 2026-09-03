@@ -57,13 +57,22 @@ class ChannelInfo:
     position: Position
 
 
+def _clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
+    """Clamp *v* to [lo, hi]."""
+    return max(lo, min(hi, v))
+
+
 async def get_channel_infos(bridge: BridgeConfig, area_id: str) -> list[ChannelInfo]:
-    """Fetch channel IDs and positions for one Entertainment Area.
+    """Fetch channel IDs and normalised positions for one Entertainment Area.
 
     Replaces the old get_area_channel_ids() which only returned IDs.
     LightChannel.position is a tuple[float, float, float] (x, y, z) set
     when the area was configured in the Hue app; defaults to (0, 0, 0) for
     lights whose position was never set.
+
+    The Hue Entertainment API specifies positions in the range -1.0…+1.0 per
+    axis.  Each component is clamped to that range here so that effect code
+    can rely on normalised coordinates without additional guards.
     """
     api = HueEntertainmentAPI(bridge.host, app_key=bridge.app_key)
     try:
@@ -74,7 +83,14 @@ async def get_channel_infos(bridge: BridgeConfig, area_id: str) -> list[ChannelI
     if area is None:
         raise ValueError(f"Entertainment area {area_id!r} not found on bridge {bridge.host!r}")
     return [
-        ChannelInfo(channel_id=ch.channel_id, position=Position(*ch.position))
+        ChannelInfo(
+            channel_id=ch.channel_id,
+            position=Position(
+                x=_clamp(ch.position[0]),
+                y=_clamp(ch.position[1]),
+                z=_clamp(ch.position[2]),
+            ),
+        )
         for ch in area.channels
     ]
 

@@ -79,6 +79,12 @@ function editProfile(btn) {
   form.elements["bars"].value = profile.bars ?? 30;
   form.elements["lower_cutoff_freq"].value = profile.lower_cutoff_freq ?? 50;
   form.elements["higher_cutoff_freq"].value = profile.higher_cutoff_freq ?? 12000;
+  if (form.elements["onset_sensitivity"])
+    form.elements["onset_sensitivity"].value = profile.onset_sensitivity ?? 1.5;
+  if (form.elements["onset_cooldown_ms"])
+    form.elements["onset_cooldown_ms"].value = profile.onset_cooldown_ms ?? 120;
+  if (form.elements["light_delay_ms"])
+    form.elements["light_delay_ms"].value = profile.light_delay_ms ?? 0;
 
   // Set the bridge, then load areas with the profile's area pre-selected.
   if (bridgeSelect) {
@@ -120,7 +126,7 @@ function cancelEdit() {
 
 async function discoverLms() {
   const btn = document.getElementById("discover-lms-btn");
-  const hostInput = document.querySelector("[name=lms_host]");
+  const hostInput = document.querySelector("input[name=lms_host]");
   if (!btn || !hostInput) return;
 
   btn.disabled = true;
@@ -150,14 +156,28 @@ async function discoverLms() {
 // Live colour preview over WebSocket
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Live colour preview over WebSocket, with onset flash
+// ---------------------------------------------------------------------------
+
 const swatch = document.getElementById("preview-swatch");
 if (swatch) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/ws/preview`);
+  let onsetTimer = null;
+
   ws.onmessage = (event) => {
-    const { r, g, b } = JSON.parse(event.data);
+    const { r, g, b, onset } = JSON.parse(event.data);
     // Values arrive as 16-bit (0-65535); scale down for CSS.
     const to8 = (v) => Math.round((v / 65535) * 255);
     swatch.style.backgroundColor = `rgb(${to8(r)}, ${to8(g)}, ${to8(b)})`;
+
+    // Show a brief white outline when an onset is detected so the user can
+    // judge detection timing against what they hear.
+    if (onset) {
+      swatch.classList.add("onset");
+      clearTimeout(onsetTimer);
+      onsetTimer = setTimeout(() => swatch.classList.remove("onset"), 80);
+    }
   };
 }

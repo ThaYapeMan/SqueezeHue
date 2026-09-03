@@ -4,10 +4,12 @@ Signal path (one layer at a time):
 
     FifoReader      — reads cava's raw FIFO output in a background thread
     BandNormaliser  — AGC: normalises each bar against its own rolling average
-    CavaAnalyser    — wraps the two above; produces AudioFeatures each frame
+    OnsetDetector   — spectral flux onset detection with EMA-based threshold
+    CavaAnalyser    — wraps the three above; produces AudioFeatures each frame
     ColourModeEffect— implements Effect; maps AudioFeatures to a Scene using
-                      one of the three legacy ColorMode strategies
-    SyncEngine      — orchestrates Analyser + Effect + Output at 30 Hz
+                      one of the two active ColorMode strategies
+    SyncEngine      — orchestrates Analyser + Effect + Output at 30 Hz,
+                      with an optional ring-buffer delay on the output
 
 Nothing in this module imports from hue_entertainment; all Hue-specific code
 lives in hue_output.py.
@@ -17,9 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import threading
 import time
+from collections import deque
 
 from .models import ColorMode, Profile
 from .types import (
@@ -196,6 +200,85 @@ class BandNormaliser:
 
 
 # ---------------------------------------------------------------------------
+# OnsetDetector — spectral flux with EMA-based adaptive threshold
+# ---------------------------------------------------------------------------
+
+
+class OnsetDetector:
+    """Detects musical onsets (note attacks, drum hits) from bar frames.
+
+    Spectral flux is the sum of positive differences between the current
+    bar frame and the previous one — it spikes whenever new spectral energy
+    appears suddenly.  A threshold is set dynamically as:
+
+        threshold = mean_flux + k * std_flux
+
+    where mean and std are tracked via separate EMAs on the flux signal.
+
+    After each onset a cooldown suppresses re-triggers for a configurable
+    number of frames, preventing a single loud transient from firing
+    repeatedly (e.g. on every hi-hat beat in a busy bar).
+
+    A warmup period at startup lets the EMA statistics converge before any
+    onset is reported, avoiding spurious triggers on the first few frames.
+    """
+
+    #: EMA factor for flux statistics.  0.1 ≈ 300 ms window at 30 Hz.
+    _ALPHA: float = 0.1
+    #: Frames to wait before reporting onsets (lets EMA statistics settle).
+    _WARMUP_FRAMES: int = 30
+
+    def __init__(self, k: float = 1.5, cooldown_frames: int = 4) -> None:
+        self._k = k
+        self._cooldown_frames = cooldown_frames
+        self._prev_bars: list[float] | None = None
+        self._flux_ema: float = 0.0
+        self._flux_var: float = 0.0   # running variance estimate (EMA of squared residuals)
+        self._cooldown: int = 0
+        self._warmup: int = self._WARMUP_FRAMES
+
+    def process(self, bars: list[float]) -> tuple[bool, float]:
+        """Return *(onset, flux_strength)* for the current bar frame.
+
+        *onset* is True on frames where a new note or beat is detected.
+        *flux_strength* is the raw spectral flux value (unnormalised).
+        """
+        if self._prev_bars is None:
+            self._prev_bars = list(bars)
+            return False, 0.0
+
+        # Spectral flux: sum of positive differences only (rising energy).
+        flux = sum(max(0.0, b - p) for b, p in zip(bars, self._prev_bars))
+        self._prev_bars = list(bars)
+
+        # Update EMA statistics for mean and variance of flux.
+        # Using the pre-update mean for the residual avoids a bias toward 0.
+        old_ema = self._flux_ema
+        self._flux_ema = old_ema + self._ALPHA * (flux - old_ema)
+        self._flux_var = self._flux_var + self._ALPHA * (
+            (flux - old_ema) ** 2 - self._flux_var
+        )
+        flux_std = math.sqrt(max(self._flux_var, 0.0))
+
+        # Suppress onsets until the EMA has had enough frames to warm up.
+        if self._warmup > 0:
+            self._warmup -= 1
+            return False, flux
+
+        # Honour cooldown: don't fire again until the countdown reaches zero.
+        if self._cooldown > 0:
+            self._cooldown -= 1
+            return False, flux
+
+        threshold = self._flux_ema + self._k * max(flux_std, 1e-6)
+        onset = flux > threshold
+        if onset:
+            self._cooldown = self._cooldown_frames
+
+        return onset, flux
+
+
+# ---------------------------------------------------------------------------
 # Helpers shared by CavaAnalyser and ColourModeEffect
 # ---------------------------------------------------------------------------
 
@@ -230,21 +313,32 @@ def _slice_avg(bars: list[float], start: float, end: float) -> float:
 
 class CavaAnalyser:
     """Reads cava bar frames from a FIFO, normalises them, and produces
-    AudioFeatures.
+    AudioFeatures including onset detection.
 
-    Wraps FifoReader (raw bytes from FIFO) and BandNormaliser (AGC).  The
-    Analyser protocol is satisfied by start(), stop(), and latest().
+    Wraps FifoReader (raw bytes from FIFO), BandNormaliser (AGC), and
+    OnsetDetector (spectral flux).  The Analyser protocol is satisfied by
+    start(), stop(), and latest().
 
     AudioFeatures produced here:
-    - bars:     normalised bar values (0.0-1.0)
-    - bass/mid/full: cumulative mel-like band slices (see AudioFeatures docs)
-    - centroid: spectral centroid normalised 0.0-1.0
-    - onset/beat/tempo: not yet computed; always False/None
+    - bars:           normalised bar values (0.0-1.0)
+    - bass/mid/full:  cumulative mel-like band slices (see AudioFeatures docs)
+    - centroid:       spectral centroid normalised 0.0-1.0
+    - onset:          True on frames where a musical onset is detected
+    - onset_strength: raw spectral flux value for that frame
+    - beat/tempo:     not yet computed; always None
     """
 
-    def __init__(self, fifo_path: str, bars: int) -> None:
+    def __init__(
+        self,
+        fifo_path: str,
+        bars: int,
+        onset_sensitivity: float = 1.5,
+        onset_cooldown_ms: float = 120.0,
+    ) -> None:
         self._reader = FifoReader(fifo_path, frame_size=bars)
         self._normaliser = BandNormaliser()
+        cooldown_frames = max(1, round(onset_cooldown_ms / 1000.0 / SEND_INTERVAL_S))
+        self._onset = OnsetDetector(k=onset_sensitivity, cooldown_frames=cooldown_frames)
 
     def start(self) -> None:
         self._reader.start()
@@ -263,6 +357,7 @@ class CavaAnalyser:
         centroid = (
             sum(i * v for i, v in enumerate(bars)) / total / n if total > 1e-9 else 0.0
         )
+        onset, onset_strength = self._onset.process(bars)
         return AudioFeatures(
             bars=bars,
             # Cumulative slices: each covers its range plus everything below it.
@@ -271,8 +366,8 @@ class CavaAnalyser:
             mid=_slice_avg(bars, 0.0, 0.55),
             full=_slice_avg(bars, 0.0, 1.0),
             centroid=centroid,
-            onset=False,
-            onset_strength=0.0,
+            onset=onset,
+            onset_strength=onset_strength,
         )
 
 
@@ -282,14 +377,15 @@ class CavaAnalyser:
 
 
 class ColourModeEffect:
-    """The three original ColorMode strategies wrapped as a stateful Effect.
+    """The two remaining ColorMode strategies wrapped as a stateful Effect.
 
-    This is the first and simplest Effect implementation.  It is stateless
-    in the sense that the rendered colour depends only on the current
-    AudioFeatures (no onset cooldown, no palette position, no decay envelope)
-    but it is a *class* rather than a function so future Effects that do need
-    per-session state (onset cooldowns, decay envelopes, palette drift) can
-    follow the same pattern.
+    bass_brightness has been removed.  The two surviving modes are:
+    - SPECTRUM_RGB:  bass/mid/treble bands mapped to R/G/B channels.
+    - MONO_PULSE:    single colour; brightness follows overall loudness.
+
+    This is stateless per-frame (rendered colour depends only on the current
+    AudioFeatures), but implemented as a class so future stateful Effects
+    (onset cooldowns, decay envelopes, palette drift) follow the same pattern.
 
     Clipping: each band value is multiplied by profile.sensitivity and clipped
     to 1.0.  This is the *second* ceiling in the pipeline (the first is
@@ -321,10 +417,6 @@ class ColourModeEffect:
         mode = self.profile.color_mode
         if mode == ColorMode.SPECTRUM_RGB:
             r, g, b = bass, mid, treble
-        elif mode == ColorMode.BASS_BRIGHTNESS:
-            # Fixed warm hue, brightness driven by bass energy.
-            brightness = max(bass, floor)
-            r, g, b = brightness, brightness * 0.6, brightness * 0.2
         else:  # MONO_PULSE
             brightness = max(overall, floor)
             r = g = b = brightness
@@ -344,12 +436,43 @@ class ColourModeEffect:
 
 class SyncEngine:
     """Owns a CavaAnalyser and a ColourModeEffect; drives them at a fixed rate
-    into whatever Output is passed to run()."""
+    into whatever Output is passed to run().
+
+    Delay buffer
+    ------------
+    profile.light_delay_ms inserts a ring-buffer delay between the effect
+    render and the output send.  Every tick appends one slot (a rendered Scene
+    or None for silent/absent frames) and pops the oldest slot once the buffer
+    is full.  This keeps the delay time-consistent: silent gaps advance the
+    buffer rather than compressing it.
+
+    With light_delay_ms = 0 (the default) the buffer has capacity 0: each
+    slot is appended and immediately popped, giving zero overhead.
+
+    last_onset
+    ----------
+    Reflects the onset flag on the most recently analysed AudioFeatures,
+    *without* any output delay applied.  This is intentional: the GUI
+    preview uses it to let the user judge detection timing directly against
+    what they hear, not against the delayed light output.
+    """
 
     def __init__(self, fifo_path: str, profile: Profile) -> None:
         self.profile = profile
-        self._analyser: Analyser = CavaAnalyser(fifo_path, bars=profile.bars)
+        self._analyser: Analyser = CavaAnalyser(
+            fifo_path,
+            bars=profile.bars,
+            onset_sensitivity=profile.onset_sensitivity,
+            onset_cooldown_ms=profile.onset_cooldown_ms,
+        )
         self._effect: Effect = ColourModeEffect(profile)
+        self._delay_frames = max(0, round(profile.light_delay_ms / 1000.0 / SEND_INTERVAL_S))
+        self._delay_buffer: deque[Scene | None] = deque()
+        self._last_onset: bool = False
+
+    @property
+    def last_onset(self) -> bool:
+        return self._last_onset
 
     def start(self) -> None:
         self._analyser.start()
@@ -357,18 +480,36 @@ class SyncEngine:
     def stop(self) -> None:
         self._analyser.stop()
 
-    async def run(self, output: Output) -> None:  # output: hue_output.HueDriver in practice
+    async def run(self, output: Output) -> None:
         """Send the latest available frame at a fixed rate until cancelled.
 
         Deliberately does NOT try to send every frame cava produces — see the
         SEND_INTERVAL_S comment above for why that overwhelmed the event loop
         and starved this very coroutine, silently killing the Entertainment
         stream via its own idle timeout.
+
+        Each tick, one slot is appended to the delay buffer (a rendered Scene
+        or None for absent/silent frames) and the oldest slot is popped once
+        the buffer exceeds delay_frames.  The output timestamp is taken at
+        send time so spatial effects that use t for animation stay consistent
+        with the real display moment rather than the render moment.
         """
         while True:
             features = self._analyser.latest()
+            t = time.monotonic()
+
             if features is not None:
-                t = time.monotonic()
+                self._last_onset = features.onset
                 scene: Scene = self._effect.render(features, t)
-                output.send(scene, t)
+                self._delay_buffer.append(scene)
+            else:
+                # None slot: advances the buffer in time without sending,
+                # so the delay stays consistent even during silent passages.
+                self._delay_buffer.append(None)
+
+            if len(self._delay_buffer) > self._delay_frames:
+                entry = self._delay_buffer.popleft()
+                if entry is not None:
+                    output.send(entry, time.monotonic())
+
             await asyncio.sleep(SEND_INTERVAL_S)
