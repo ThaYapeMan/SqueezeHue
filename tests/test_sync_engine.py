@@ -1,7 +1,14 @@
 import pytest
 
 from huesync.models import ColorMode, Profile
-from huesync.sync_engine import BandNormaliser, ColourModeEffect, OnsetDetector, _band_average, _band_avg, _hz_to_frac
+from huesync.sync_engine import (
+    BandNormaliser,
+    ColourModeEffect,
+    OnsetDetector,
+    _band_average,
+    _band_avg,
+    _hz_to_frac,
+)
 from huesync.types import AudioFeatures, Position
 
 # ---------------------------------------------------------------------------
@@ -91,7 +98,8 @@ def test_colour_mode_effect_spectrum_rgb_full_treble():
     profile = Profile(color_mode=ColorMode.SPECTRUM_RGB, sensitivity=1.0, bars=30)
     effect = ColourModeEffect(profile)
     n = 30
-    mid_hi = int(_hz_to_frac(profile.mid_hz, profile.lower_cutoff_freq, profile.higher_cutoff_freq) * n)
+    mid_frac = _hz_to_frac(profile.mid_hz, profile.lower_cutoff_freq, profile.higher_cutoff_freq)
+    mid_hi = int(mid_frac * n)
     bars = [0.0] * mid_hi + [1.0] * (n - mid_hi)
     colour = effect.render(_make_features(bars), 0.0).color_at(_ORIGIN, 0.0)
     assert colour.b > 0.0
