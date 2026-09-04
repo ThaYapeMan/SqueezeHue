@@ -7,6 +7,7 @@ export interface SocketStatus {
   latency_warning: string | null
   processes: { squeezelite: boolean; cava: boolean }
   bridge_connected: boolean
+  color_mode: string | null
 }
 
 export interface PreviewState {

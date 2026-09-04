@@ -300,6 +300,7 @@ async def ws_preview(websocket: WebSocket):
                 "latency_warning": player_manager.latency_warning,
                 "processes": player_manager.process_status,
                 "bridge_connected": player_manager.bridge_connected,
+                "color_mode": player_manager.active_color_mode,
             }
             status_json = json.dumps(status_dict, sort_keys=True)
             if status_json != last_status_json:

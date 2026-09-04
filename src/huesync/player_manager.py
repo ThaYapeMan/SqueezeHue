@@ -108,6 +108,12 @@ class PlayerManager:
             return self._active.sync_engine.last_bars
         return []
 
+    @property
+    def active_color_mode(self) -> str | None:
+        if self._active:
+            return self._active.profile.color_mode.value
+        return None
+
     async def activate(self, profile: Profile) -> None:
         """Stop whatever is currently active, then start this profile.
 

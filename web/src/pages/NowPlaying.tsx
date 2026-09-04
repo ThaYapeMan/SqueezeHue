@@ -92,7 +92,7 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <SpectrumBars bars={bars} />
+          <SpectrumBars bars={bars} colorMode={status?.color_mode ?? null} />
         </CardContent>
       </Card>
 
