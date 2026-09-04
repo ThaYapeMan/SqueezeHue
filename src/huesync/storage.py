@@ -25,7 +25,9 @@ class Storage:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
-            self._write({"bridges": [], "profiles": [], "player_latencies": [], "active_profile_id": None})
+            self._write(
+                {"bridges": [], "profiles": [], "player_latencies": [], "active_profile_id": None}
+            )
 
     def _read(self) -> dict:
         with self.path.open("r", encoding="utf-8") as f:

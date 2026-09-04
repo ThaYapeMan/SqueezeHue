@@ -1,6 +1,7 @@
 """HueSync - spectrum-reactive Philips Hue Entertainment sync for Lyrion Music Server."""
 
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 try:
     __version__: str = _pkg_version("huesync")
