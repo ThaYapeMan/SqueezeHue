@@ -20,10 +20,12 @@ from pathlib import Path
 
 from .hue_bridge import list_entertainment_areas
 from .hue_output import HueDriver, HueOutputConfig, get_channel_infos
+from .latency import FixedLatencyProbe, NoLatencyProbe
+from .lms_status import query_lms_status
 from .models import Profile
 from .storage import Storage
 from .sync_engine import SyncEngine
-from .types import Colour
+from .types import Colour, LatencyProbe
 
 log = logging.getLogger(__name__)
 
@@ -41,13 +43,21 @@ class ActiveSession:
         self.sync_engine: SyncEngine | None = None
         self.hue_driver: HueDriver | None = None
         self.task: asyncio.Task | None = None
+        self.probe: LatencyProbe = NoLatencyProbe()
+        self.poller_task: asyncio.Task | None = None
 
 
 class PlayerManager:
     def __init__(self, storage: Storage):
         self.storage = storage
         self._active: ActiveSession | None = None
+        self.latency_warning: str | None = None
+        self._detected_sync_master: str | None = None
         _RUN_DIR.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def detected_sync_master(self) -> str | None:
+        return self._detected_sync_master
 
     @property
     def active_profile_id(self) -> str | None:
@@ -101,11 +111,14 @@ class PlayerManager:
             area_name=area.name,
         )
 
+        self.latency_warning = None
+        self._detected_sync_master = None
+
         session = ActiveSession(profile)
         try:
             self._start_squeezelite(session, profile)
 
-            engine = SyncEngine(str(session.fifo_path), profile)
+            engine = SyncEngine(str(session.fifo_path), profile, probe=session.probe)
             session.sync_engine = engine
 
             # Order matters: the FIFO reader must be attached BEFORE cava
@@ -129,6 +142,7 @@ class PlayerManager:
             session.hue_driver = hue_driver
 
             session.task = asyncio.create_task(engine.run(hue_driver))
+            session.poller_task = asyncio.create_task(self._poll_sync_master(session))
         except Exception:
             # Whatever got started before the failure - squeezelite, cava,
             # the FIFO, a partially-opened Hue session - gets torn down
@@ -145,15 +159,20 @@ class PlayerManager:
             return
         session = self._active
         self._active = None
+        self.latency_warning = None
+        self._detected_sync_master = None
         await self._teardown_session(session)
         self.storage.set_active_profile_id(None)
         log.info("Deactivated profile %s", session.profile.name)
 
     async def _teardown_session(self, session: ActiveSession) -> None:
+        if session.poller_task:
+            session.poller_task.cancel()
         if session.task:
             session.task.cancel()
         if session.sync_engine:
             session.sync_engine.stop()
+        await session.probe.stop()
         if session.hue_driver:
             try:
                 await session.hue_driver.stop()
@@ -171,6 +190,71 @@ class PlayerManager:
 
         for p in (session.fifo_path, session.cava_conf_path):
             p.unlink(missing_ok=True)
+
+    async def _poll_sync_master(self, session: ActiveSession) -> None:
+        """Periodically query LMS for the sync master and update the probe.
+
+        Runs as a background task for the lifetime of the active session.
+        The first poll happens after a short delay; subsequent polls every 15 s.
+        A failed or timed-out query is logged and skipped — it never affects
+        the running session.  The probe is only swapped when the sync master
+        MAC actually changes, so routine steady-state polls are a no-op.
+        """
+        profile = session.profile
+        current_master: str | None = object()  # type: ignore[assignment]  # sentinel
+        first = True
+
+        while True:
+            await asyncio.sleep(2 if first else 15)
+            first = False
+
+            try:
+                status = await asyncio.to_thread(
+                    query_lms_status, profile.lms_host, profile.player_mac
+                )
+                new_master = status.sync_master
+            except Exception as exc:
+                log.debug("LMS status poll failed for %s: %s", profile.player_mac, exc)
+                continue
+
+            if new_master == current_master:
+                continue
+
+            current_master = new_master
+            self._detected_sync_master = new_master
+
+            if new_master is None or new_master == profile.player_mac:
+                # Standalone player or HueSync is the sync master — source is
+                # immediate, no delay compensation needed.
+                new_probe: LatencyProbe = NoLatencyProbe()
+                self.latency_warning = None
+            else:
+                pl = self.storage.get_player_latency(new_master)
+                if pl is None:
+                    self.latency_warning = (
+                        f"Sync master {new_master} has no latency config — "
+                        f"using 0 ms. Add it in the Player latency section."
+                    )
+                    new_probe = NoLatencyProbe()
+                elif pl.strategy == "fixed":
+                    new_probe = FixedLatencyProbe(pl.fixed_delay_ms)
+                    self.latency_warning = None
+                else:  # "none" or future strategies
+                    new_probe = NoLatencyProbe()
+                    self.latency_warning = None
+
+            old_probe = session.probe
+            await new_probe.start()
+            session.probe = new_probe
+            if session.sync_engine:
+                session.sync_engine.update_probe(new_probe)
+            await old_probe.stop()
+            log.info(
+                "Latency probe updated: sync_master=%s probe=%s delay_ms=%d",
+                new_master,
+                type(new_probe).__name__,
+                new_probe.current_delay_ms(),
+            )
 
     # ALSA output device for the virtual player. This is deliberately NOT
     # "null": ALSA's null plugin discards samples the instant they arrive,

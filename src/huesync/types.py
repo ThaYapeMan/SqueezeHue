@@ -217,3 +217,30 @@ class Output(Protocol):
     """
 
     def send(self, scene: Scene, t: float) -> None: ...
+
+
+# ---------------------------------------------------------------------------
+# LatencyProbe — contract between the latency subsystem and SyncEngine
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class LatencyProbe(Protocol):
+    """Estimates the current audio-to-lights delay for a listening player.
+
+    start()/stop() bracket the probe's lifetime.  current_delay_ms() is
+    synchronous, never blocks, and may be called on every frame in the hot
+    loop inside SyncEngine.run().
+
+    Implementations:
+        NoLatencyProbe    — returns 0 (local squeezelite, no delay needed)
+        FixedLatencyProbe — returns a constant (AirPlay, stable negotiated delay)
+        UpnpPositionProbe — polls UPnP continuously (Sonos, step 3)
+    """
+
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+
+    def current_delay_ms(self) -> int:
+        """Best current estimate of the delay in milliseconds. Never blocks."""
+        ...

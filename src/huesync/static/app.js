@@ -83,8 +83,6 @@ function editProfile(btn) {
     form.elements["onset_delta"].value = profile.onset_delta ?? 0.1;
   if (form.elements["onset_alpha"])
     form.elements["onset_alpha"].value = profile.onset_alpha ?? 0.9;
-  if (form.elements["light_delay_ms"])
-    form.elements["light_delay_ms"].value = profile.light_delay_ms ?? 0;
 
   // Set the bridge, then load areas with the profile's area pre-selected.
   if (bridgeSelect) {
@@ -153,11 +151,20 @@ async function discoverLms() {
 }
 
 // ---------------------------------------------------------------------------
-// Live colour preview over WebSocket
+// Player latency — strategy dropdown
 // ---------------------------------------------------------------------------
 
+function toggleFixedDelay() {
+  const sel = document.getElementById("latency-strategy");
+  const lbl = document.getElementById("fixed-delay-label");
+  if (sel && lbl) lbl.style.display = sel.value === "fixed" ? "" : "none";
+}
+
+// Set initial state on page load.
+toggleFixedDelay();
+
 // ---------------------------------------------------------------------------
-// Live colour preview over WebSocket, with onset flash
+// Live colour preview over WebSocket, with onset flash and latency status
 // ---------------------------------------------------------------------------
 
 const swatch = document.getElementById("preview-swatch");
@@ -167,7 +174,7 @@ if (swatch) {
   let onsetTimer = null;
 
   ws.onmessage = (event) => {
-    const { r, g, b, onset } = JSON.parse(event.data);
+    const { r, g, b, onset, latency_warning, sync_master } = JSON.parse(event.data);
     // Values arrive as 16-bit (0-65535); scale down for CSS.
     const to8 = (v) => Math.round((v / 65535) * 255);
     swatch.style.backgroundColor = `rgb(${to8(r)}, ${to8(g)}, ${to8(b)})`;
@@ -178,6 +185,26 @@ if (swatch) {
       swatch.classList.add("onset");
       clearTimeout(onsetTimer);
       onsetTimer = setTimeout(() => swatch.classList.remove("onset"), 80);
+    }
+
+    const masterEl = document.getElementById("sync-master-info");
+    if (masterEl) {
+      if (sync_master) {
+        masterEl.textContent = `Detected sync master: ${sync_master}`;
+        masterEl.style.display = "";
+      } else {
+        masterEl.style.display = "none";
+      }
+    }
+
+    const warnEl = document.getElementById("latency-warning");
+    if (warnEl) {
+      if (latency_warning) {
+        warnEl.textContent = latency_warning;
+        warnEl.style.display = "";
+      } else {
+        warnEl.style.display = "none";
+      }
     }
   };
 }

@@ -25,12 +25,14 @@ import threading
 import time
 from collections import deque
 
+from .latency import NoLatencyProbe
 from .models import ColorMode, Profile
 from .types import (
     Analyser,
     AudioFeatures,
     Colour,
     Effect,
+    LatencyProbe,
     Output,
     Scene,
     UniformScene,
@@ -477,14 +479,16 @@ class SyncEngine:
 
     Delay buffer
     ------------
-    profile.light_delay_ms inserts a ring-buffer delay between the effect
-    render and the output send.  Every tick appends one slot (a rendered Scene
-    or None for silent/absent frames) and pops the oldest slot once the buffer
-    is full.  This keeps the delay time-consistent: silent gaps advance the
-    buffer rather than compressing it.
+    A LatencyProbe is queried each tick for the current delay in milliseconds.
+    Every tick appends one slot (a rendered Scene or None for silent/absent
+    frames) and pops the oldest slot(s) to keep the buffer at the probe's
+    target depth.  This keeps the delay time-consistent: silent gaps advance
+    the buffer rather than compressing it.
 
-    With light_delay_ms = 0 (the default) the buffer has capacity 0: each
-    slot is appended and immediately popped, giving zero overhead.
+    The probe defaults to NoLatencyProbe (0 ms, zero overhead).
+    PlayerManager constructs the appropriate probe from the PlayerLatency config
+    and can install a new one live via update_probe() — for example when the
+    LMS sync master changes between polling cycles.
 
     last_onset
     ----------
@@ -494,7 +498,12 @@ class SyncEngine:
     what they hear, not against the delayed light output.
     """
 
-    def __init__(self, fifo_path: str, profile: Profile) -> None:
+    def __init__(
+        self,
+        fifo_path: str,
+        profile: Profile,
+        probe: LatencyProbe | None = None,
+    ) -> None:
         self.profile = profile
         self._analyser: Analyser = CavaAnalyser(
             fifo_path,
@@ -503,9 +512,13 @@ class SyncEngine:
             onset_alpha=profile.onset_alpha,
         )
         self._effect: Effect = ColourModeEffect(profile)
-        self._delay_frames = max(0, round(profile.light_delay_ms / 1000.0 / SEND_INTERVAL_S))
+        self._probe: LatencyProbe = probe if probe is not None else NoLatencyProbe()
         self._delay_buffer: deque[Scene | None] = deque()
         self._last_onset: bool = False
+
+    def update_probe(self, probe: LatencyProbe) -> None:
+        """Swap the latency probe live. Safe to call from the asyncio event loop."""
+        self._probe = probe
 
     @property
     def last_onset(self) -> bool:
@@ -526,10 +539,10 @@ class SyncEngine:
         stream via its own idle timeout.
 
         Each tick, one slot is appended to the delay buffer (a rendered Scene
-        or None for absent/silent frames) and the oldest slot is popped once
-        the buffer exceeds delay_frames.  The output timestamp is taken at
-        send time so spatial effects that use t for animation stay consistent
-        with the real display moment rather than the render moment.
+        or None for absent/silent frames) and the oldest slot(s) are popped
+        to keep the buffer at the probe's current target depth.  The output
+        timestamp is taken at send time so spatial effects that use t for
+        animation stay consistent with the real display moment.
         """
         while True:
             features = self._analyser.latest()
@@ -544,7 +557,10 @@ class SyncEngine:
                 # so the delay stays consistent even during silent passages.
                 self._delay_buffer.append(None)
 
-            if len(self._delay_buffer) > self._delay_frames:
+            delay_frames = max(
+                0, round(self._probe.current_delay_ms() / 1000.0 / SEND_INTERVAL_S)
+            )
+            while len(self._delay_buffer) > delay_frames:
                 entry = self._delay_buffer.popleft()
                 if entry is not None:
                     output.send(entry, time.monotonic())

@@ -15,7 +15,7 @@ import json
 import threading
 from pathlib import Path
 
-from .models import BridgeConfig, Profile
+from .models import BridgeConfig, PlayerLatency, Profile
 
 _lock = threading.Lock()
 
@@ -25,11 +25,14 @@ class Storage:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
-            self._write({"bridges": [], "profiles": [], "active_profile_id": None})
+            self._write({"bridges": [], "profiles": [], "player_latencies": [], "active_profile_id": None})
 
     def _read(self) -> dict:
         with self.path.open("r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        # Back-fill any top-level keys added after the initial file was written.
+        data.setdefault("player_latencies", [])
+        return data
 
     def _write(self, data: dict) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -81,6 +84,32 @@ class Storage:
             data["profiles"] = [p for p in data["profiles"] if p["id"] != profile_id]
             if data.get("active_profile_id") == profile_id:
                 data["active_profile_id"] = None
+            self._write(data)
+
+    # -- Player latencies ---------------------------------------------------
+
+    def list_player_latencies(self) -> list[PlayerLatency]:
+        with _lock:
+            return [PlayerLatency.from_dict(p) for p in self._read()["player_latencies"]]
+
+    def get_player_latency(self, player_mac: str) -> PlayerLatency | None:
+        return next((p for p in self.list_player_latencies() if p.player_mac == player_mac), None)
+
+    def save_player_latency(self, pl: PlayerLatency) -> None:
+        with _lock:
+            data = self._read()
+            data["player_latencies"] = [
+                p for p in data["player_latencies"] if p["player_mac"] != pl.player_mac
+            ]
+            data["player_latencies"].append(pl.to_dict())
+            self._write(data)
+
+    def delete_player_latency(self, player_mac: str) -> None:
+        with _lock:
+            data = self._read()
+            data["player_latencies"] = [
+                p for p in data["player_latencies"] if p["player_mac"] != player_mac
+            ]
             self._write(data)
 
     # -- Active profile -----------------------------------------------------

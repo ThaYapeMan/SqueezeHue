@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import hue_bridge
 from .lms_discovery import discover_lms
-from .models import ColorMode, Profile
+from .models import ColorMode, PlayerLatency, Profile
 from .player_manager import PlayerManager
 from .storage import Storage
 from .util import generate_locally_administered_mac
@@ -49,21 +49,21 @@ async def on_shutdown() -> None:
 # -- Pages ------------------------------------------------------------------
 
 
+def _page_ctx(request: Request, **extras) -> dict:
+    """Build the base template context, merged with any extra keys."""
+    return {
+        "bridges": storage.list_bridges(),
+        "profiles": storage.list_profiles(),
+        "player_latencies": storage.list_player_latencies(),
+        "active_id": player_manager.active_profile_id,
+        "color_modes": list(ColorMode),
+        **extras,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    bridges = storage.list_bridges()
-    profiles = storage.list_profiles()
-    active_id = player_manager.active_profile_id
-    return templates.TemplateResponse(
-        request,
-        "index.html",
-        {
-            "bridges": bridges,
-            "profiles": profiles,
-            "active_id": active_id,
-            "color_modes": list(ColorMode),
-        },
-    )
+    return templates.TemplateResponse(request, "index.html", _page_ctx(request))
 
 
 # -- Bridges ------------------------------------------------------------------
@@ -77,16 +77,13 @@ async def pair_bridge(request: Request, host: str = Form(...), name: str = Form(
         return templates.TemplateResponse(
             request,
             "index.html",
-            {
-                "bridges": storage.list_bridges(),
-                "profiles": storage.list_profiles(),
-                "active_id": player_manager.active_profile_id,
-                "color_modes": list(ColorMode),
-                "pair_error": (
+            _page_ctx(
+                request,
+                pair_error=(
                     "Pairing timed out. Press the physical link button on the bridge, "
                     "then submit this form again within ~30 seconds."
                 ),
-            },
+            ),
             status_code=400,
         )
     storage.save_bridge(bridge)
@@ -149,7 +146,6 @@ async def save_profile(
     higher_cutoff_freq: int = Form(12000),
     onset_delta: float = Form(0.1),
     onset_alpha: float = Form(0.9),
-    light_delay_ms: int = Form(0),
 ):
     existing = storage.get_profile(profile_id) if profile_id else None
     profile = existing or Profile()
@@ -169,7 +165,6 @@ async def save_profile(
     profile.higher_cutoff_freq = higher_cutoff_freq
     profile.onset_delta = onset_delta
     profile.onset_alpha = onset_alpha
-    profile.light_delay_ms = light_delay_ms
     profile.bars = bars
     if not profile.player_mac:
         profile.player_mac = generate_locally_administered_mac()
@@ -211,13 +206,10 @@ async def activate_profile(request: Request, profile_id: str):
         return templates.TemplateResponse(
             request,
             "index.html",
-            {
-                "bridges": storage.list_bridges(),
-                "profiles": storage.list_profiles(),
-                "active_id": player_manager.active_profile_id,
-                "color_modes": list(ColorMode),
-                "pair_error": f"Could not activate profile '{profile.name}': {exc}",
-            },
+            _page_ctx(
+                request,
+                pair_error=f"Could not activate profile '{profile.name}': {exc}",
+            ),
             status_code=400,
         )
     return RedirectResponse("/", status_code=303)
@@ -226,6 +218,32 @@ async def activate_profile(request: Request, profile_id: str):
 @app.post("/profiles/deactivate")
 async def deactivate_profile():
     await player_manager.deactivate()
+    return RedirectResponse("/", status_code=303)
+
+
+# -- Player latencies -----------------------------------------------------------
+
+
+@app.post("/player-latencies")
+async def save_player_latency(
+    player_mac: str = Form(...),
+    strategy: str = Form("fixed"),
+    fixed_delay_ms: int = Form(2000),
+    speaker_ip: str = Form(""),
+):
+    pl = PlayerLatency(
+        player_mac=player_mac.strip().lower(),
+        strategy=strategy,
+        fixed_delay_ms=fixed_delay_ms,
+        speaker_ip=speaker_ip.strip() or None,
+    )
+    storage.save_player_latency(pl)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/player-latencies/delete")
+async def delete_player_latency(player_mac: str = Form(...)):
+    storage.delete_player_latency(player_mac)
     return RedirectResponse("/", status_code=303)
 
 
@@ -241,9 +259,16 @@ async def ws_preview(websocket: WebSocket):
             onset = player_manager.last_onset
             if colours:
                 r, g, b = colours[0].to_16bit()
-                await websocket.send_json({"r": r, "g": g, "b": b, "onset": onset})
             else:
-                await websocket.send_json({"r": 0, "g": 0, "b": 0, "onset": False})
+                r = g = b = 0
+            await websocket.send_json({
+                "r": r,
+                "g": g,
+                "b": b,
+                "onset": onset,
+                "latency_warning": player_manager.latency_warning,
+                "sync_master": player_manager.detected_sync_master,
+            })
             await asyncio.sleep(0.05)
     except WebSocketDisconnect:
         pass

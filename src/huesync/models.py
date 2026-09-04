@@ -52,6 +52,38 @@ class BridgeConfig:
         return cls(**d)
 
 
+@dataclass
+class PlayerLatency:
+    """Per-player latency configuration, keyed by the LMS sync-master MAC.
+
+    Stored globally (not per-profile) because the delay belongs to the
+    listening player, not to the HueSync light target.
+    """
+
+    player_mac: str
+    strategy: str = "fixed"     # "none" | "fixed"; "upnp" reserved for step 3
+    fixed_delay_ms: int = 2000  # used when strategy == "fixed"
+    # Reserved for step 3 (UpnpPositionProbe). No effect for strategy != "upnp".
+    speaker_ip: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "player_mac": self.player_mac,
+            "strategy": self.strategy,
+            "fixed_delay_ms": self.fixed_delay_ms,
+            "speaker_ip": self.speaker_ip,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> PlayerLatency:
+        return cls(
+            player_mac=d["player_mac"],
+            strategy=d.get("strategy", "fixed"),
+            fixed_delay_ms=d.get("fixed_delay_ms", 2000),
+            speaker_ip=d.get("speaker_ip"),
+        )
+
+
 #: Profile field names as a set — used to strip unknown keys when loading old
 #: or future config files so cls(**d) never receives unexpected kwargs.
 _PROFILE_FIELDS: frozenset[str] = frozenset()  # filled after class definition
@@ -106,12 +138,6 @@ class Profile:
     # onset_alpha: per-frame decay of the adaptive suppression threshold (condition 3).
     # Higher values = longer suppression after a loud onset.  Range 0–1.
     onset_alpha: float = 0.9
-
-    # Output delay.  Positive values delay the light output relative to the
-    # analysed audio.  Use this when the audio source (e.g. Sonos) buffers
-    # significantly and the lights arrive before the sound does.
-    # Implemented as a ring buffer in SyncEngine; range 0-3000 ms.
-    light_delay_ms: int = 0
 
     enabled: bool = True
 

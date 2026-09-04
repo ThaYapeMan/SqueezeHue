@@ -151,18 +151,65 @@
       <p class="hint">Suppression decay per frame after an onset. Higher = longer suppression. Default 0.9.</p>
     </fieldset>
 
-    <fieldset>
-      <legend>Output timing</legend>
-      <label>Light delay (ms) <input type="number" step="10" min="0" max="3000" name="light_delay_ms" value="0"></label>
-      <p class="hint">Delays light output relative to audio. Use when lights arrive before the sound (e.g. Sonos buffers 1–2 s).</p>
-    </fieldset>
-
     <div class="form-actions">
       <button type="submit">Save profile</button>
       <button type="button" id="cancel-edit" onclick="cancelEdit()" style="display:none">Cancel edit</button>
     </div>
   </form>
   {% endif %}
+</section>
+
+<section class="card">
+  <h2>Player latency</h2>
+  <p class="hint">
+    Configure the audio-to-lights delay per listening player. HueSync detects
+    the LMS sync master automatically every 15 s and applies the matching entry.
+    Use strategy <em>Fixed</em> for AirPlay (~2000 ms) and similar players with
+    a stable, negotiated latency.
+  </p>
+
+  <p id="sync-master-info" class="hint" style="display:none"></p>
+  <p id="latency-warning" class="error" style="display:none"></p>
+
+  {% if player_latencies %}
+  <table>
+    <tr><th>Player MAC</th><th>Strategy</th><th>Delay (ms)</th><th></th></tr>
+    {% for pl in player_latencies %}
+    <tr>
+      <td><code>{{ pl.player_mac }}</code></td>
+      <td>{{ pl.strategy }}</td>
+      <td>{{ pl.fixed_delay_ms if pl.strategy == "fixed" else "—" }}</td>
+      <td>
+        <form method="post" action="/player-latencies/delete">
+          <input type="hidden" name="player_mac" value="{{ pl.player_mac }}">
+          <button type="submit" class="danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+    <p class="hint">No entries yet.</p>
+  {% endif %}
+
+  <h3>Add / update entry</h3>
+  <form method="post" action="/player-latencies">
+    <label>Player MAC
+      <input type="text" name="player_mac" placeholder="aa:bb:cc:dd:ee:ff" required
+             pattern="([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}">
+    </label>
+    <label>Strategy
+      <select name="strategy" id="latency-strategy" onchange="toggleFixedDelay()">
+        <option value="none">None (0 ms)</option>
+        <option value="fixed" selected>Fixed</option>
+      </select>
+    </label>
+    <label id="fixed-delay-label">
+      Fixed delay (ms)
+      <input type="number" name="fixed_delay_ms" value="2000" min="0" max="10000" step="50">
+    </label>
+    <button type="submit">Save</button>
+  </form>
 </section>
 
 <script src="/static/app.js"></script>
