@@ -4,6 +4,9 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
+  // base defaults to '/' which is correct for the dev server.
+  // The build script passes --base=/new/ for the temporary FastAPI mount;
+  // remove that flag when the app moves to / permanently.
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
