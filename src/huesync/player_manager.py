@@ -21,6 +21,7 @@ from pathlib import Path
 from .hue_bridge import list_entertainment_areas
 from .hue_output import HueDriver, HueOutputConfig, get_channel_infos
 from .latency import FixedLatencyProbe, NoLatencyProbe
+from .lms_discovery import discover_lms
 from .lms_status import query_lms_status, query_lms_sync_peers
 from .models import Profile
 from .storage import Storage
@@ -373,6 +374,36 @@ class PlayerManager:
         first = True
         poll_n = 0
 
+        # If lms_host is empty (profile saved without filling in the LMS host
+        # field), squeezelite still works via its own UDP discovery, but the
+        # poll loop needs a real host to open a TCP CLI connection.  Attempt
+        # one-shot discovery here so the poller can still function.
+        lms_host = profile.lms_host
+        if not lms_host:
+            log.warning(
+                "profile %r has no lms_host configured; "
+                "attempting UDP discovery to find LMS for sync-master polling",
+                profile.name,
+            )
+            try:
+                servers = await discover_lms(timeout=3.0)
+                if servers:
+                    lms_host = servers[0].host
+                    log.info(
+                        "LMS discovered at %s (%s) — using for sync-master poll; "
+                        "set lms_host in the profile to avoid this",
+                        lms_host, servers[0].name,
+                    )
+                else:
+                    log.warning(
+                        "LMS discovery found nothing; sync-master polling disabled "
+                        "until lms_host is configured in the profile"
+                    )
+                    return
+            except Exception as exc:
+                log.warning("LMS discovery failed (%s); sync-master polling disabled", exc)
+                return
+
         while True:
             await asyncio.sleep(2 if first else 15)
             first = False
@@ -381,7 +412,7 @@ class PlayerManager:
             # --- Stage 1: status query ---
             try:
                 status = await asyncio.to_thread(
-                    query_lms_status, profile.lms_host, profile.player_mac
+                    query_lms_status, lms_host, profile.player_mac
                 )
                 new_master = status.sync_master
                 log.debug(
@@ -400,7 +431,7 @@ class PlayerManager:
             if new_master is None:
                 try:
                     peers = await asyncio.to_thread(
-                        query_lms_sync_peers, profile.lms_host, profile.player_mac
+                        query_lms_sync_peers, lms_host, profile.player_mac
                     )
                     log.debug("Poll #%d sync? peers=%r", poll_n, peers)
                     if peers:
@@ -430,7 +461,7 @@ class PlayerManager:
             if new_master and new_master != profile.player_mac:
                 try:
                     master_status = await asyncio.to_thread(
-                        query_lms_status, profile.lms_host, new_master
+                        query_lms_status, lms_host, new_master
                     )
                     self._detected_sync_master_name = master_status.player_name
                 except Exception as exc:

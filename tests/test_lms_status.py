@@ -11,9 +11,16 @@ the same encoding the production parser sees.
 
 from urllib.parse import quote
 
+import pytest
 from pytest import approx
 
-from huesync.lms_status import LmsPlayerStatus, _parse_status, _parse_sync_response
+from huesync.lms_status import (
+    LmsPlayerStatus,
+    _parse_status,
+    _parse_sync_response,
+    query_lms_status,
+    query_lms_sync_peers,
+)
 
 
 def _build_response(*fields: str) -> str:
@@ -207,3 +214,24 @@ def test_parse_sync_response_matches_production_mac():
         "02%3Aae%3A8a%3Ab0%3A24%3A9b sync 94%3A9f%3A3e%3Afa%3Aba%3A66"
     )
     assert peers == ["94:9f:3e:fa:ba:66"]
+
+
+# ---------------------------------------------------------------------------
+# Host validation — empty lms_host must never silently become a DNS lookup
+# ---------------------------------------------------------------------------
+
+
+def test_query_lms_status_raises_on_empty_host():
+    """query_lms_status must raise ValueError for an empty host before opening
+    any socket.  Empty string passed to getaddrinfo on Linux produces
+    [Errno -2] Name or service not known — an opaque OS error with no hint
+    that the profile is misconfigured.  A ValueError surfaces the real cause.
+    """
+    with pytest.raises(ValueError, match="LMS host is not configured"):
+        query_lms_status("", "aa:bb:cc:dd:ee:ff")
+
+
+def test_query_lms_sync_peers_raises_on_empty_host():
+    """Same contract for query_lms_sync_peers."""
+    with pytest.raises(ValueError, match="LMS host is not configured"):
+        query_lms_sync_peers("", "aa:bb:cc:dd:ee:ff")

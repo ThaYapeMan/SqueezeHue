@@ -51,8 +51,14 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
     fully URL-encoded by LMS, including the colon that separates keys from
     values (%3A).  See _parse_status for the parsing strategy.
 
+    Raises ValueError if *host* is empty (misconfigured profile).
     Raises OSError / TimeoutError on connection or timeout errors.
     """
+    if not host:
+        raise ValueError(
+            "LMS host is not configured in this profile. "
+            "Open the profile editor and enter the LMS server IP or hostname."
+        )
     command = f"{mac} status - 1 tags:\n"
     log.debug("LMS query: %s:%d player=%s", host, port, mac)
     with socket.create_connection((host, port), timeout=_SOCKET_TIMEOUT_S) as sock:
@@ -74,8 +80,14 @@ def query_lms_sync_peers(host: str, mac: str, port: int = DEFAULT_PORT) -> list[
     reliable fallback for stopped/idle players.
 
     Returns an empty list if the player is standalone.
+    Raises ValueError if *host* is empty (misconfigured profile).
     Raises OSError / TimeoutError on connection or timeout errors.
     """
+    if not host:
+        raise ValueError(
+            "LMS host is not configured in this profile. "
+            "Open the profile editor and enter the LMS server IP or hostname."
+        )
     command = f"{mac} sync ?\n"
     log.debug("LMS sync? query: %s:%d player=%s", host, port, mac)
     with socket.create_connection((host, port), timeout=_SOCKET_TIMEOUT_S) as sock:

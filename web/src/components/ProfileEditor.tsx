@@ -154,6 +154,10 @@ export function ProfileEditor({ profile, bridges, onSave, onClose, open }: Props
   }
 
   async function handleSave() {
+    if (!form.lms_host.trim()) {
+      setError('LMS host is required. Enter the IP address of your LMS server or use Discover.')
+      return
+    }
     setSaving(true)
     setError(null)
     try {
