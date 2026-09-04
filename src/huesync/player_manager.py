@@ -32,6 +32,19 @@ log = logging.getLogger(__name__)
 _RUN_DIR = Path(tempfile.gettempdir()) / "huesync"
 
 
+class _Unset:
+    """Sentinel for "never polled yet" in _poll_sync_master.
+
+    Distinct from None (standalone player) and produces a readable repr
+    rather than <object object at 0x...> in log lines.
+    """
+    def __repr__(self) -> str:
+        return "(unset)"
+
+
+_UNSET: str | None = _Unset()  # type: ignore[assignment]
+
+
 class ActiveSession:
     def __init__(self, profile: Profile):
         self.profile = profile
@@ -256,7 +269,7 @@ class PlayerManager:
             self.latency_warning = None
         else:
             pl = self.storage.get_player_latency(master)
-            log.info("PlayerLatency lookup for sync_master=%r -> %r", master, pl)
+            log.debug("PlayerLatency lookup for sync_master=%r -> %r", master, pl)
             if pl is None:
                 self.latency_warning = (
                     f"Sync master {master} has no latency config — "
@@ -295,7 +308,7 @@ class PlayerManager:
         the user saves a PlayerLatency config for the current sync master).
         """
         profile = session.profile
-        current_master: str | None = object()  # type: ignore[assignment]  # sentinel
+        current_master: str | None = _UNSET
         first = True
 
         while True:
@@ -311,7 +324,7 @@ class PlayerManager:
                 log.info("LMS status poll failed for %s: %s", profile.player_mac, exc)
                 continue
 
-            log.info("Sync master poll: player=%s sync_master=%r", profile.player_mac, new_master)
+            log.debug("Sync master poll: player=%s sync_master=%r", profile.player_mac, new_master)
 
             if new_master == current_master:
                 continue

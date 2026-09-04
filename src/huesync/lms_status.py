@@ -41,7 +41,7 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
     Raises OSError / socket.timeout on connection or timeout errors.
     """
     command = f"{mac} status - 1 tags:\n"
-    log.info("LMS query: %s:%d player=%s", host, port, mac)
+    log.debug("LMS query: %s:%d player=%s", host, port, mac)
     with socket.create_connection((host, port), timeout=_SOCKET_TIMEOUT_S) as sock:
         sock.sendall(command.encode("utf-8"))
         chunks: list[bytes] = []
@@ -53,10 +53,10 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
             if b"\n" in chunk:
                 break
     raw = b"".join(chunks).decode("utf-8", errors="replace").strip()
-    log.info("LMS raw response: %r", raw[:400])
+    log.debug("LMS raw response: %r", raw[:400])
     result = _parse_status(raw)
-    log.info("LMS parsed: player_name=%r sync_master=%r sync_slaves=%r",
-             result.player_name, result.sync_master, result.sync_slaves)
+    log.debug("LMS parsed: player_name=%r sync_master=%r sync_slaves=%r",
+              result.player_name, result.sync_master, result.sync_slaves)
     return result
 
 
