@@ -55,6 +55,8 @@ interface FormState {
   onset_alpha: number
   lower_cutoff_freq: string
   higher_cutoff_freq: string
+  bass_hz: string
+  mid_hz: string
 }
 
 function defaultForm(profile?: Profile): FormState {
@@ -76,6 +78,8 @@ function defaultForm(profile?: Profile): FormState {
     onset_alpha: profile?.onset_alpha ?? 0.9,
     lower_cutoff_freq: String(profile?.lower_cutoff_freq ?? 50),
     higher_cutoff_freq: String(profile?.higher_cutoff_freq ?? 10000),
+    bass_hz: String(profile?.bass_hz ?? 250),
+    mid_hz: String(profile?.mid_hz ?? 2000),
   }
 }
 
@@ -173,6 +177,8 @@ export function ProfileEditor({ profile, bridges, onSave, onClose, open }: Props
         onset_alpha: form.onset_alpha,
         lower_cutoff_freq: parseInt(form.lower_cutoff_freq, 10),
         higher_cutoff_freq: parseInt(form.higher_cutoff_freq, 10),
+        bass_hz: parseInt(form.bass_hz, 10),
+        mid_hz: parseInt(form.mid_hz, 10),
         enabled: true,
       }
       if (isEditing) {
@@ -404,6 +410,31 @@ export function ProfileEditor({ profile, bridges, onSave, onClose, open }: Props
             </FormRow>
             <p className="text-xs text-muted-foreground italic">
               Apply in Now Playing tab while music plays to hear the effect.
+            </p>
+          </div>
+
+          <SectionLabel>Band boundaries (Hz)</SectionLabel>
+          <div className="space-y-3">
+            <FormRow label="Bass / mid boundary (Hz)">
+              <Input
+                type="number"
+                min={50}
+                max={2000}
+                value={form.bass_hz}
+                onChange={(e) => set('bass_hz', e.target.value)}
+              />
+            </FormRow>
+            <FormRow label="Mid / treble boundary (Hz)">
+              <Input
+                type="number"
+                min={200}
+                max={10000}
+                value={form.mid_hz}
+                onChange={(e) => set('mid_hz', e.target.value)}
+              />
+            </FormRow>
+            <p className="text-xs text-muted-foreground italic">
+              Used by Spectrum RGB mode. Must be within the low/high cut range.
             </p>
           </div>
         </div>

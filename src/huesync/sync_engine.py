@@ -345,6 +345,23 @@ def _slice_avg(bars: list[float], start: float, end: float) -> float:
     return sum(segment) / len(segment) if segment else 0.0
 
 
+def _hz_to_frac(hz: float, lower: float, upper: float) -> float:
+    """Bar-fraction for *hz* given cava's log-spaced range [lower, upper].
+
+    Matches the logFraction() formula used in the frontend SpectrumBars component.
+    Returns 0.0 when hz <= lower and 1.0 when hz >= upper.
+    """
+    log_min = math.log10(max(lower, 1.0))
+    log_max = math.log10(max(upper, lower + 1.0))
+    return max(0.0, min(1.0, (math.log10(max(hz, 1.0)) - log_min) / (log_max - log_min)))
+
+
+def _band_avg(bars: list[float], lo: int, hi: int) -> float:
+    """Average of bars[lo:hi]; 0.0 if the band has no bars."""
+    segment = bars[lo:hi]
+    return sum(segment) / len(segment) if segment else 0.0
+
+
 # ---------------------------------------------------------------------------
 # CavaAnalyser — implements the Analyser protocol
 # ---------------------------------------------------------------------------
@@ -446,11 +463,22 @@ class ColourModeEffect:
         floor = self.profile.brightness_floor
         bars = features.bars
 
-        # Legacy exclusive band proportions — kept to match the original
-        # frame_to_commands() behaviour so existing profiles sound the same.
-        bass = min(_slice_avg(bars, 0.0, 0.15) * sens, 1.0)
-        mid = min(_slice_avg(bars, 0.15, 0.5) * sens, 1.0)
-        treble = min(_slice_avg(bars, 0.5, 1.0) * sens, 1.0)
+        n = len(bars)
+        bass_frac = _hz_to_frac(
+            self.profile.bass_hz,
+            self.profile.lower_cutoff_freq,
+            self.profile.higher_cutoff_freq,
+        )
+        mid_frac = _hz_to_frac(
+            self.profile.mid_hz,
+            self.profile.lower_cutoff_freq,
+            self.profile.higher_cutoff_freq,
+        )
+        bass_hi = int(bass_frac * n)
+        mid_hi = int(mid_frac * n)
+        bass = min(_band_avg(bars, 0, bass_hi) * sens, 1.0)
+        mid = min(_band_avg(bars, bass_hi, mid_hi) * sens, 1.0)
+        treble = min(_band_avg(bars, mid_hi, n) * sens, 1.0)
         overall = min(_slice_avg(bars, 0.0, 1.0) * sens, 1.0)
 
         mode = self.profile.color_mode

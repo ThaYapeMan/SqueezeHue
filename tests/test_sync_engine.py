@@ -1,5 +1,7 @@
+import pytest
+
 from huesync.models import ColorMode, Profile
-from huesync.sync_engine import BandNormaliser, ColourModeEffect, OnsetDetector, _band_average
+from huesync.sync_engine import BandNormaliser, ColourModeEffect, OnsetDetector, _band_average, _band_avg, _hz_to_frac
 from huesync.types import AudioFeatures, Position
 
 # ---------------------------------------------------------------------------
@@ -85,13 +87,13 @@ def test_colour_mode_effect_respects_brightness_floor_on_silence():
 
 
 def test_colour_mode_effect_spectrum_rgb_full_treble():
-    """Pure treble energy (upper half of bars) → blue channel active, not bass/mid."""
+    """Pure treble energy → blue channel active; bass and mid channels are zero."""
     profile = Profile(color_mode=ColorMode.SPECTRUM_RGB, sensitivity=1.0, bars=30)
     effect = ColourModeEffect(profile)
-    # All energy in the top 50 % of bars (= treble in the legacy 0-15/15-50/50-100 split).
-    bars = [0.0] * 15 + [1.0] * 15
+    n = 30
+    mid_hi = int(_hz_to_frac(profile.mid_hz, profile.lower_cutoff_freq, profile.higher_cutoff_freq) * n)
+    bars = [0.0] * mid_hi + [1.0] * (n - mid_hi)
     colour = effect.render(_make_features(bars), 0.0).color_at(_ORIGIN, 0.0)
-    # Treble maps to blue; bass/mid bars are zero so R and G should be near 0.
     assert colour.b > 0.0
     assert colour.r == 0.0
     assert colour.g == 0.0
@@ -291,3 +293,28 @@ def test_onset_strength_zero_on_falling_energy():
     detector.process(bars_high)
     _, strength = detector.process(bars_low)
     assert strength == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _hz_to_frac and _band_avg
+# ---------------------------------------------------------------------------
+
+
+def test_hz_to_frac_known_values():
+    """Verify a few known values of the log-scale mapping."""
+    # At the exact lower bound, fraction = 0.0; at upper bound, fraction = 1.0.
+    assert _hz_to_frac(50, 50, 12000) == pytest.approx(0.0)
+    assert _hz_to_frac(12000, 50, 12000) == pytest.approx(1.0)
+    # 2000 Hz is at about 67% of the log range 50–12000.
+    frac = _hz_to_frac(2000, 50, 12000)
+    assert 0.65 < frac < 0.70
+    # Clamping: below lower → 0, above upper → 1.
+    assert _hz_to_frac(1, 50, 12000) == pytest.approx(0.0)
+    assert _hz_to_frac(99999, 50, 12000) == pytest.approx(1.0)
+
+
+def test_band_avg_empty_slice():
+    """_band_avg returns 0.0 for an empty slice (lo >= hi)."""
+    bars = [1.0] * 10
+    assert _band_avg(bars, 5, 5) == 0.0
+    assert _band_avg(bars, 0, 0) == 0.0

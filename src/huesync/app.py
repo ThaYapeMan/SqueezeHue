@@ -17,7 +17,8 @@ from .api import router as api_router
 from .player_manager import PlayerManager
 from .storage import Storage
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+_LOG_LEVEL = getattr(logging, os.environ.get("HUESYNC_LOG_LEVEL", "INFO").upper(), logging.INFO)
+logging.basicConfig(level=_LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent
@@ -91,6 +92,8 @@ async def ws_preview(websocket: WebSocket):
                 "color_mode": player_manager.active_color_mode,
                 "lower_cutoff_freq": player_manager.active_lower_cutoff_freq,
                 "higher_cutoff_freq": player_manager.active_higher_cutoff_freq,
+                "bass_hz": player_manager.active_bass_hz,
+                "mid_hz": player_manager.active_mid_hz,
             }
             status_json = json.dumps(status_dict, sort_keys=True)
             if status_json != last_status_json:

@@ -1,8 +1,5 @@
 const PLACEHOLDER_COUNT = 30
 
-const BASS_MID_HZ = 300
-const MID_TREBLE_HZ = 2000
-
 const BAND_COLORS = {
   bass:   'rgb(239, 68, 68)',
   mid:    'rgb(34, 197, 94)',
@@ -19,8 +16,8 @@ function fmtHz(hz: number): string {
   return hz >= 1000 ? `${Math.round(hz / 100) / 10} kHz` : `${hz} Hz`
 }
 
-function sliceAvg(bars: number[], lo: number, hi: number): number {
-  const slice = bars.slice(lo, Math.max(hi, lo + 1))
+function bandAvg(bars: number[], lo: number, hi: number): number {
+  const slice = bars.slice(lo, hi)
   return slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : 0
 }
 
@@ -29,34 +26,47 @@ interface Props {
   colorMode: string | null
   lowerCutoffHz?: number
   higherCutoffHz?: number
+  bassHz?: number
+  midHz?: number
 }
 
-export function SpectrumBars({ bars, colorMode, lowerCutoffHz = 50, higherCutoffHz = 12000 }: Props) {
+export function SpectrumBars({
+  bars,
+  colorMode,
+  lowerCutoffHz = 50,
+  higherCutoffHz = 12000,
+  bassHz = 250,
+  midHz = 2000,
+}: Props) {
   const data = bars.length > 0 ? bars : Array(PLACEHOLDER_COUNT).fill(0)
   const n = data.length
   const isRgb = colorMode === 'spectrum_rgb'
 
-  // Single source of truth: integer bar indices for both coloring and dividers.
-  const bassHi = Math.floor(logFraction(BASS_MID_HZ, lowerCutoffHz, higherCutoffHz) * n)
-  const midHi  = Math.floor(logFraction(MID_TREBLE_HZ, lowerCutoffHz, higherCutoffHz) * n)
+  // Single source of truth for both bar colouring and divider lines.
+  // Uses the same log-scale formula as the backend _hz_to_frac().
+  const bassHi = Math.floor(logFraction(bassHz, lowerCutoffHz, higherCutoffHz) * n)
+  const midHi  = Math.floor(logFraction(midHz,  lowerCutoffHz, higherCutoffHz) * n)
 
-  const bassAvg   = isRgb ? sliceAvg(data, 0, bassHi) : 0
-  const midAvg    = isRgb ? sliceAvg(data, bassHi, midHi) : 0
-  const trebleAvg = isRgb ? sliceAvg(data, midHi, n) : 0
+  const bassAvg   = isRgb ? bandAvg(data, 0,      bassHi) : 0
+  const midAvg    = isRgb ? bandAvg(data, bassHi, midHi)  : 0
+  const trebleAvg = isRgb ? bandAvg(data, midHi,  n)      : 0
+
+  // Detect empty bands: warn the user instead of silently showing nothing.
+  const bassEmpty   = isRgb && bassHi === 0
+  const midEmpty    = isRgb && midHi <= bassHi
+  const trebleEmpty = isRgb && midHi >= n
 
   // Axis tick marks: low cutoff, bass/mid boundary, mid/treble boundary, high cutoff.
-  // Each tick: { pct: position 0–100, label, color?, align }
   type Align = 'left' | 'center' | 'right'
   const ticks: { pct: number; label: string; color?: string; align: Align }[] = []
   if (isRgb) {
-    ticks.push({ pct: 0,   label: fmtHz(lowerCutoffHz),  align: 'left' })
+    ticks.push({ pct: 0,   label: fmtHz(lowerCutoffHz), align: 'left' })
     const bassPct = (bassHi / n) * 100
     const midPct  = (midHi  / n) * 100
-    // Only show intermediate ticks if the boundary is within [5%, 95%]
     if (bassPct > 5 && bassPct < 95)
-      ticks.push({ pct: bassPct, label: fmtHz(BASS_MID_HZ), color: BAND_COLORS.bass, align: 'center' })
+      ticks.push({ pct: bassPct, label: fmtHz(bassHz), color: BAND_COLORS.bass, align: 'center' })
     if (midPct > 5 && midPct < 95 && Math.abs(midPct - bassPct) > 8)
-      ticks.push({ pct: midPct, label: fmtHz(MID_TREBLE_HZ), color: BAND_COLORS.mid, align: 'center' })
+      ticks.push({ pct: midPct, label: fmtHz(midHz), color: BAND_COLORS.mid, align: 'center' })
     ticks.push({ pct: 100, label: fmtHz(higherCutoffHz), align: 'right' })
   }
 
@@ -117,9 +127,15 @@ export function SpectrumBars({ bars, colorMode, lowerCutoffHz = 50, higherCutoff
           </div>
 
           <div className="flex justify-between mt-1 text-xs font-mono">
-            <span style={{ color: BAND_COLORS.bass }}>Bass {bassAvg.toFixed(2)}</span>
-            <span style={{ color: BAND_COLORS.mid }}>Mid {midAvg.toFixed(2)}</span>
-            <span style={{ color: BAND_COLORS.treble }}>Treble {trebleAvg.toFixed(2)}</span>
+            <span style={{ color: BAND_COLORS.bass }}>
+              {bassEmpty ? <em className="not-italic opacity-50">Bass (empty)</em> : `Bass ${bassAvg.toFixed(2)}`}
+            </span>
+            <span style={{ color: BAND_COLORS.mid }}>
+              {midEmpty ? <em className="not-italic opacity-50">Mid (empty)</em> : `Mid ${midAvg.toFixed(2)}`}
+            </span>
+            <span style={{ color: BAND_COLORS.treble }}>
+              {trebleEmpty ? <em className="not-italic opacity-50">Treble (empty)</em> : `Treble ${trebleAvg.toFixed(2)}`}
+            </span>
           </div>
         </>
       )}

@@ -29,6 +29,14 @@ from .types import Colour, LatencyProbe
 
 log = logging.getLogger(__name__)
 
+
+def _log_task_failure(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("Background task %r raised an exception", task.get_name(), exc_info=exc)
+
 _RUN_DIR = Path(tempfile.gettempdir()) / "huesync"
 
 
@@ -139,6 +147,14 @@ class PlayerManager:
         return self._active.profile.higher_cutoff_freq if self._active else None
 
     @property
+    def active_bass_hz(self) -> int | None:
+        return self._active.profile.bass_hz if self._active is not None else None
+
+    @property
+    def active_mid_hz(self) -> int | None:
+        return self._active.profile.mid_hz if self._active is not None else None
+
+    @property
     def active_color_mode(self) -> str | None:
         if self._active:
             return self._active.profile.color_mode.value
@@ -205,7 +221,9 @@ class PlayerManager:
             session.hue_driver = hue_driver
 
             session.task = asyncio.create_task(engine.run(hue_driver))
+            session.task.add_done_callback(_log_task_failure)
             session.poller_task = asyncio.create_task(self._poll_sync_master(session))
+            session.poller_task.add_done_callback(_log_task_failure)
         except Exception:
             # Whatever got started before the failure - squeezelite, cava,
             # the FIFO, a partially-opened Hue session - gets torn down

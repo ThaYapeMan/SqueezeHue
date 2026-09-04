@@ -13,6 +13,8 @@ export interface SocketStatus {
   color_mode: string | null
   lower_cutoff_freq: number | null
   higher_cutoff_freq: number | null
+  bass_hz: number | null
+  mid_hz: number | null
 }
 
 export interface PreviewState {

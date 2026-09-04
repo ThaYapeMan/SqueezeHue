@@ -47,6 +47,8 @@ class ProfileCreateBody(BaseModel):
     bars: int = 30
     lower_cutoff_freq: int = 50
     higher_cutoff_freq: int = 12000
+    bass_hz: int = 250
+    mid_hz: int = 2000
     onset_delta: float = 0.1
     onset_alpha: float = 0.9
     exertion_clip: float = 3.0
@@ -68,6 +70,8 @@ class ProfilePatchBody(BaseModel):
     bars: int | None = None
     lower_cutoff_freq: int | None = None
     higher_cutoff_freq: int | None = None
+    bass_hz: int | None = None
+    mid_hz: int | None = None
     onset_delta: float | None = None
     onset_alpha: float | None = None
     exertion_clip: float | None = None
@@ -175,6 +179,8 @@ async def create_profile(request: Request, body: ProfileCreateBody):
         bars=body.bars,
         lower_cutoff_freq=body.lower_cutoff_freq,
         higher_cutoff_freq=body.higher_cutoff_freq,
+        bass_hz=body.bass_hz,
+        mid_hz=body.mid_hz,
         onset_delta=body.onset_delta,
         onset_alpha=body.onset_alpha,
         exertion_clip=body.exertion_clip,

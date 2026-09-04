@@ -30,6 +30,8 @@ export interface Profile {
   bars: number
   lower_cutoff_freq: number
   higher_cutoff_freq: number
+  bass_hz: number
+  mid_hz: number
   onset_delta: number
   onset_alpha: number
   exertion_clip: number

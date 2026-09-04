@@ -178,6 +178,8 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
             colorMode={status?.color_mode ?? null}
             lowerCutoffHz={appliedLower}
             higherCutoffHz={appliedHigher}
+            bassHz={status?.bass_hz ?? 250}
+            midHz={status?.mid_hz ?? 2000}
           />
 
           {profileId && (

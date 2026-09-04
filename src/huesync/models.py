@@ -133,6 +133,11 @@ class Profile:
     # general:higher_cutoff_freq).
     lower_cutoff_freq: int = 50
     higher_cutoff_freq: int = 12000
+    # Band boundary frequencies for SPECTRUM_RGB mode (Hz).
+    # bass covers lower_cutoff_freq .. bass_hz, mid covers bass_hz .. mid_hz,
+    # treble covers mid_hz .. higher_cutoff_freq.
+    bass_hz: int = 250
+    mid_hz: int = 2000
 
     # Onset detection tuning (Dixon 2006 three-condition peak-picking).
     # onset_delta: margin above the asymmetric local mean required for condition 2.
