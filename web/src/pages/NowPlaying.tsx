@@ -135,8 +135,20 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
     }
   }
 
-  const lowerHz  = sliderToHz(lowSlider)
-  const higherHz = sliderToHz(highSlider)
+  // Applied values (what cava is actually using) — drive the spectrum display.
+  const appliedLower  = status?.lower_cutoff_freq  ?? 50
+  const appliedHigher = status?.higher_cutoff_freq ?? 12000
+
+  // Pending values from the sliders (what would be applied on click).
+  const pendingLower  = sliderToHz(lowSlider)
+  const pendingHigher = sliderToHz(highSlider)
+
+  const hasChanges = pendingLower !== appliedLower || pendingHigher !== appliedHigher
+
+  function handleReset() {
+    setLowSlider(hzToSlider(50))
+    setHighSlider(hzToSlider(12000))
+  }
 
   return (
     <div className="space-y-4">
@@ -164,8 +176,8 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
           <SpectrumBars
             bars={bars}
             colorMode={status?.color_mode ?? null}
-            lowerCutoffHz={lowerHz}
-            higherCutoffHz={higherHz}
+            lowerCutoffHz={appliedLower}
+            higherCutoffHz={appliedHigher}
           />
 
           {profileId && (
@@ -178,7 +190,7 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
                   min={0}
                   max={100}
                   step={1}
-                  format={() => `${lowerHz} Hz`}
+                  format={() => `${pendingLower} Hz`}
                   onChange={setLowSlider}
                   disabled={applying}
                 />
@@ -188,13 +200,16 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
                   min={0}
                   max={100}
                   step={1}
-                  format={() => `${higherHz} Hz`}
+                  format={() => `${pendingHigher} Hz`}
                   onChange={setHighSlider}
                   disabled={applying}
                 />
                 <div className="flex items-center gap-3">
-                  <Button size="sm" onClick={handleApply} disabled={applying}>
+                  <Button size="sm" onClick={handleApply} disabled={applying || !hasChanges}>
                     {applying ? 'Applying…' : 'Apply'}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={handleReset} disabled={applying}>
+                    Reset
                   </Button>
                   {applyResult && (
                     <span className={applyError ? 'text-destructive text-sm' : 'text-sm text-muted-foreground'}>
