@@ -240,12 +240,14 @@ async def save_player_latency(
         speaker_ip=speaker_ip.strip() or None,
     )
     storage.save_player_latency(pl)
+    await player_manager.refresh_probe()
     return RedirectResponse("/", status_code=303)
 
 
 @app.post("/player-latencies/delete")
 async def delete_player_latency(player_mac: str = Form(...)):
     storage.delete_player_latency(player_mac)
+    await player_manager.refresh_probe()
     return RedirectResponse("/", status_code=303)
 
 

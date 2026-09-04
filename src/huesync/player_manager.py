@@ -191,6 +191,54 @@ class PlayerManager:
         for p in (session.fifo_path, session.cava_conf_path):
             p.unlink(missing_ok=True)
 
+    async def refresh_probe(self) -> None:
+        """Re-evaluate the latency probe for the current sync master.
+
+        Call this after saving or deleting a PlayerLatency entry so that a
+        running session picks up the change immediately, without requiring a
+        deactivate/reactivate cycle.  Does nothing when no session is active.
+        """
+        if self._active is None:
+            return
+        await self._apply_probe_for_master(self._active, self._detected_sync_master)
+
+    async def _apply_probe_for_master(
+        self, session: ActiveSession, master: str | None
+    ) -> None:
+        """Build the correct probe for *master* and install it on *session*."""
+        profile = session.profile
+        if master is None or master == profile.player_mac:
+            # Standalone player or HueSync is the sync master — no delay needed.
+            new_probe: LatencyProbe = NoLatencyProbe()
+            self.latency_warning = None
+        else:
+            pl = self.storage.get_player_latency(master)
+            if pl is None:
+                self.latency_warning = (
+                    f"Sync master {master} has no latency config — "
+                    f"using 0 ms. Add it in the Player latency section."
+                )
+                new_probe = NoLatencyProbe()
+            elif pl.strategy == "fixed":
+                new_probe = FixedLatencyProbe(pl.fixed_delay_ms)
+                self.latency_warning = None
+            else:  # "none" or future strategies
+                new_probe = NoLatencyProbe()
+                self.latency_warning = None
+
+        old_probe = session.probe
+        await new_probe.start()
+        session.probe = new_probe
+        if session.sync_engine:
+            session.sync_engine.update_probe(new_probe)
+        await old_probe.stop()
+        log.info(
+            "Latency probe updated: sync_master=%s probe=%s delay_ms=%d",
+            master,
+            type(new_probe).__name__,
+            new_probe.current_delay_ms(),
+        )
+
     async def _poll_sync_master(self, session: ActiveSession) -> None:
         """Periodically query LMS for the sync master and update the probe.
 
@@ -199,6 +247,8 @@ class PlayerManager:
         A failed or timed-out query is logged and skipped — it never affects
         the running session.  The probe is only swapped when the sync master
         MAC actually changes, so routine steady-state polls are a no-op.
+        Use refresh_probe() to force an immediate re-evaluation (e.g. after
+        the user saves a PlayerLatency config for the current sync master).
         """
         profile = session.profile
         current_master: str | None = object()  # type: ignore[assignment]  # sentinel
@@ -222,39 +272,7 @@ class PlayerManager:
 
             current_master = new_master
             self._detected_sync_master = new_master
-
-            if new_master is None or new_master == profile.player_mac:
-                # Standalone player or HueSync is the sync master — source is
-                # immediate, no delay compensation needed.
-                new_probe: LatencyProbe = NoLatencyProbe()
-                self.latency_warning = None
-            else:
-                pl = self.storage.get_player_latency(new_master)
-                if pl is None:
-                    self.latency_warning = (
-                        f"Sync master {new_master} has no latency config — "
-                        f"using 0 ms. Add it in the Player latency section."
-                    )
-                    new_probe = NoLatencyProbe()
-                elif pl.strategy == "fixed":
-                    new_probe = FixedLatencyProbe(pl.fixed_delay_ms)
-                    self.latency_warning = None
-                else:  # "none" or future strategies
-                    new_probe = NoLatencyProbe()
-                    self.latency_warning = None
-
-            old_probe = session.probe
-            await new_probe.start()
-            session.probe = new_probe
-            if session.sync_engine:
-                session.sync_engine.update_probe(new_probe)
-            await old_probe.stop()
-            log.info(
-                "Latency probe updated: sync_master=%s probe=%s delay_ms=%d",
-                new_master,
-                type(new_probe).__name__,
-                new_probe.current_delay_ms(),
-            )
+            await self._apply_probe_for_master(session, new_master)
 
     # ALSA output device for the virtual player. This is deliberately NOT
     # "null": ALSA's null plugin discards samples the instant they arrive,
