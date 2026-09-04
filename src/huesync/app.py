@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import hue_bridge
+from .api import router as api_router
 from .lms_discovery import discover_lms
 from .models import ColorMode, PlayerLatency, Profile
 from .player_manager import PlayerManager
@@ -31,6 +33,10 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 storage = Storage(CONFIG_PATH)
 player_manager = PlayerManager(storage)
+
+app.state.storage = storage
+app.state.player_manager = player_manager
+app.include_router(api_router)
 
 
 @app.on_event("startup")
@@ -257,6 +263,8 @@ async def delete_player_latency(player_mac: str = Form(...)):
 @app.websocket("/ws/preview")
 async def ws_preview(websocket: WebSocket):
     await websocket.accept()
+    last_status_json: str | None = None
+    tick = 0
     try:
         while True:
             colours = player_manager.last_colours
@@ -265,14 +273,34 @@ async def ws_preview(websocket: WebSocket):
                 r, g, b = colours[0].to_16bit()
             else:
                 r = g = b = 0
+
             await websocket.send_json({
-                "r": r,
-                "g": g,
-                "b": b,
+                "type": "frame",
+                "colour": {"r": r, "g": g, "b": b},
                 "onset": onset,
-                "latency_warning": player_manager.latency_warning,
-                "sync_master": player_manager.detected_sync_master,
             })
+
+            if tick % 3 == 0:
+                await websocket.send_json({
+                    "type": "spectrum",
+                    "bars": player_manager.last_bars,
+                })
+
+            status_dict = {
+                "type": "status",
+                "active_profile_id": player_manager.active_profile_id,
+                "sync_master": player_manager.detected_sync_master,
+                "applied_delay_ms": player_manager.applied_delay_ms,
+                "latency_warning": player_manager.latency_warning,
+                "processes": player_manager.process_status,
+                "bridge_connected": player_manager.bridge_connected,
+            }
+            status_json = json.dumps(status_dict, sort_keys=True)
+            if status_json != last_status_json:
+                await websocket.send_json(status_dict)
+                last_status_json = status_json
+
+            tick += 1
             await asyncio.sleep(0.05)
     except WebSocketDisconnect:
         pass

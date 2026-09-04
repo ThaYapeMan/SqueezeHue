@@ -516,6 +516,7 @@ class SyncEngine:
         self._probe: LatencyProbe = probe if probe is not None else NoLatencyProbe()
         self._delay_buffer: deque[Scene | None] = deque()
         self._last_onset: bool = False
+        self._last_bars: list[float] = []
 
     def update_probe(self, probe: LatencyProbe) -> None:
         """Swap the latency probe live. Safe to call from the asyncio event loop."""
@@ -524,6 +525,10 @@ class SyncEngine:
     @property
     def last_onset(self) -> bool:
         return self._last_onset
+
+    @property
+    def last_bars(self) -> list[float]:
+        return self._last_bars
 
     def start(self) -> None:
         self._analyser.start()
@@ -551,6 +556,7 @@ class SyncEngine:
 
             if features is not None:
                 self._last_onset = features.onset
+                self._last_bars = features.bars
                 scene: Scene = self._effect.render(features, t)
                 self._delay_buffer.append(scene)
             else:

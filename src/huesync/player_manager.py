@@ -81,6 +81,33 @@ class PlayerManager:
             return self._active.sync_engine.last_onset
         return False
 
+    @property
+    def process_status(self) -> dict[str, bool]:
+        if not self._active:
+            return {"squeezelite": False, "cava": False}
+        sl = self._active.squeezelite
+        cava = self._active.cava
+        return {
+            "squeezelite": bool(sl and sl.poll() is None),
+            "cava": bool(cava and cava.poll() is None),
+        }
+
+    @property
+    def applied_delay_ms(self) -> int:
+        if not self._active:
+            return 0
+        return self._active.probe.current_delay_ms()
+
+    @property
+    def bridge_connected(self) -> bool:
+        return bool(self._active and self._active.hue_driver)
+
+    @property
+    def last_bars(self) -> list[float]:
+        if self._active and self._active.sync_engine:
+            return self._active.sync_engine.last_bars
+        return []
+
     async def activate(self, profile: Profile) -> None:
         """Stop whatever is currently active, then start this profile.
 
