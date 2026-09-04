@@ -30,6 +30,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/huesync"]
+# webui/ (built React app) lives under src/huesync/ and is included automatically.
 
 [tool.ruff]
 line-length = 100

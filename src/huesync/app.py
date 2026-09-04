@@ -31,6 +31,12 @@ app = FastAPI(title="HueSync")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+# Serve the React frontend at /new during the transition to the new UI.
+# html=True makes StaticFiles serve index.html for unknown paths (SPA behaviour).
+_WEBUI_DIR = BASE_DIR / "webui"
+if _WEBUI_DIR.exists():
+    app.mount("/new", StaticFiles(directory=str(_WEBUI_DIR), html=True), name="webui")
+
 storage = Storage(CONFIG_PATH)
 player_manager = PlayerManager(storage)
 
