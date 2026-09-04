@@ -61,14 +61,16 @@ class PlayerLatency:
     """
 
     player_mac: str
-    strategy: str = "fixed"     # "none" | "fixed"; "upnp" reserved for step 3
-    fixed_delay_ms: int = 2000  # used when strategy == "fixed"
+    name: str | None = None      # human-readable label, e.g. "Sonos Living Room"
+    strategy: str = "fixed"      # "none" | "fixed"; "upnp" reserved for step 3
+    fixed_delay_ms: int = 2000   # used when strategy == "fixed"
     # Reserved for step 3 (UpnpPositionProbe). No effect for strategy != "upnp".
     speaker_ip: str | None = None
 
     def to_dict(self) -> dict:
         return {
             "player_mac": self.player_mac,
+            "name": self.name,
             "strategy": self.strategy,
             "fixed_delay_ms": self.fixed_delay_ms,
             "speaker_ip": self.speaker_ip,
@@ -78,6 +80,7 @@ class PlayerLatency:
     def from_dict(cls, d: dict) -> PlayerLatency:
         return cls(
             player_mac=d["player_mac"],
+            name=d.get("name"),
             strategy=d.get("strategy", "fixed"),
             fixed_delay_ms=d.get("fixed_delay_ms", 2000),
             speaker_ip=d.get("speaker_ip"),

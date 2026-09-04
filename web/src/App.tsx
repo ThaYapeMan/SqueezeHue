@@ -1,6 +1,10 @@
 import { usePreviewSocket } from '@/hooks/usePreviewSocket'
 import { NowPlaying } from '@/pages/NowPlaying'
+import { Profiles } from '@/pages/Profiles'
+import { Bridges } from '@/pages/Bridges'
+import { Latency } from '@/pages/Latency'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 
 function ConnectionBadge({ connected, attempt }: { connected: boolean; attempt: number }) {
   if (connected) {
@@ -30,17 +34,62 @@ export default function App() {
         </div>
       </header>
 
-      <nav className="border-b border-border">
-        <div className="max-w-2xl mx-auto px-4">
-          <button className="py-3 text-sm font-medium border-b-2 border-primary text-primary -mb-px">
-            Now Playing
-          </button>
+      <Tabs defaultValue="now-playing">
+        <div className="border-b border-border">
+          <div className="max-w-2xl mx-auto px-4">
+            <TabsList className="h-auto rounded-none bg-transparent p-0 gap-0">
+              <TabsTrigger
+                value="now-playing"
+                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3 px-4"
+              >
+                Now Playing
+              </TabsTrigger>
+              <TabsTrigger
+                value="profiles"
+                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3 px-4"
+              >
+                Profiles
+              </TabsTrigger>
+              <TabsTrigger
+                value="bridges"
+                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3 px-4"
+              >
+                Bridges
+              </TabsTrigger>
+              <TabsTrigger
+                value="latency"
+                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3 px-4"
+              >
+                Latency
+              </TabsTrigger>
+            </TabsList>
+          </div>
         </div>
-      </nav>
 
-      <main className="max-w-2xl mx-auto px-4 py-6">
-        <NowPlaying colour={colour} onset={onset} bars={bars} status={status} />
-      </main>
+        <div className="max-w-2xl mx-auto px-4 py-6">
+          <TabsContent value="now-playing">
+            <NowPlaying colour={colour} onset={onset} bars={bars} status={status} />
+          </TabsContent>
+
+          <TabsContent value="profiles">
+            <Profiles
+              activeProfileId={status?.active_profile_id ?? null}
+              onActivationChange={() => {}}
+            />
+          </TabsContent>
+
+          <TabsContent value="bridges">
+            <Bridges />
+          </TabsContent>
+
+          <TabsContent value="latency">
+            <Latency
+              syncMaster={status?.sync_master ?? null}
+              syncMasterName={status?.sync_master_name ?? null}
+            />
+          </TabsContent>
+        </div>
+      </Tabs>
     </div>
   )
 }

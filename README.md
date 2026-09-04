@@ -239,8 +239,7 @@ git add src/huesync/webui/
 
 Deploy as usual (`git pull && pip install . && systemctl restart huesync`).
 The `pip install .` step re-embeds the git commit hash into the package.
-The built UI is temporarily served at `/new`; the classic HTML UI stays on `/`
-during the transition.
+The built UI is served at `/`.
 
 ## Known limitations / roadmap
 

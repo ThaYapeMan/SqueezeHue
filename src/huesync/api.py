@@ -75,6 +75,7 @@ class ProfilePatchBody(BaseModel):
 
 class PlayerLatencyCreateBody(BaseModel):
     player_mac: str
+    name: str | None = None
     strategy: str = "fixed"
     fixed_delay_ms: int = 2000
     speaker_ip: str | None = None
@@ -83,6 +84,7 @@ class PlayerLatencyCreateBody(BaseModel):
 class PlayerLatencyPatchBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    name: str | None = None
     strategy: str | None = None
     fixed_delay_ms: int | None = None
     speaker_ip: str | None = None
@@ -236,6 +238,18 @@ async def delete_profile(profile_id: str, request: Request):
     storage.delete_profile(profile_id)
 
 
+@router.post("/profiles/{profile_id}/restart-cava")
+async def restart_cava(profile_id: str, request: Request):
+    manager = _manager(request)
+    if manager.active_profile_id != profile_id:
+        raise HTTPException(status_code=400, detail="Profile is not active")
+    try:
+        await manager.restart_cava()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True}
+
+
 @router.post("/profiles/{profile_id}/activate")
 async def activate_profile(profile_id: str, request: Request):
     storage = _storage(request)
@@ -271,6 +285,7 @@ async def create_player_latency(request: Request, body: PlayerLatencyCreateBody)
 
     pl = PlayerLatency(
         player_mac=body.player_mac.strip().lower(),
+        name=body.name,
         strategy=body.strategy,
         fixed_delay_ms=body.fixed_delay_ms,
         speaker_ip=body.speaker_ip,

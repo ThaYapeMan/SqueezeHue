@@ -1,8 +1,23 @@
+import { useEffect, useState } from 'react'
 import { ColourSwatch } from '@/components/ColourSwatch'
 import { SpectrumBars } from '@/components/SpectrumBars'
+import { SliderField } from '@/components/SliderField'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { PreviewState, SocketStatus } from '@/hooks/usePreviewSocket'
+import { type Profile, getProfile, updateProfile, restartCava } from '@/lib/api'
+
+const LOG_MIN = Math.log10(20)
+const LOG_MAX = Math.log10(20000)
+
+function hzToSlider(hz: number): number {
+  return (Math.log10(Math.max(hz, 20)) - LOG_MIN) / (LOG_MAX - LOG_MIN) * 100
+}
+
+function sliderToHz(v: number): number {
+  return Math.round(10 ** (LOG_MIN + v / 100 * (LOG_MAX - LOG_MIN)))
+}
 
 function ProcessBadge({ running }: { running: boolean }) {
   return (
@@ -77,6 +92,82 @@ function StatusGrid({ status }: { status: SocketStatus | null }) {
   )
 }
 
+function FrequencyCutoffs({ profileId }: { profileId: string }) {
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [lowSlider, setLowSlider] = useState(50)
+  const [highSlider, setHighSlider] = useState(50)
+  const [applying, setApplying] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [resultError, setResultError] = useState(false)
+
+  useEffect(() => {
+    getProfile(profileId)
+      .then((p) => {
+        setProfile(p)
+        setLowSlider(hzToSlider(p.lower_cutoff_freq))
+        setHighSlider(hzToSlider(p.higher_cutoff_freq))
+      })
+      .catch(() => {})
+  }, [profileId])
+
+  async function handleApply() {
+    if (!profile) return
+    setApplying(true)
+    setResult(null)
+    setResultError(false)
+    try {
+      const lowerHz = sliderToHz(lowSlider)
+      const higherHz = sliderToHz(highSlider)
+      await updateProfile(profile.id, { lower_cutoff_freq: lowerHz, higher_cutoff_freq: higherHz })
+      await restartCava(profile.id)
+      setResult('Applied.')
+    } catch (e) {
+      setResult(e instanceof Error ? e.message : 'Failed')
+      setResultError(true)
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  if (!profile) return null
+
+  return (
+    <div className="space-y-4">
+      <SliderField
+        label="Low cut"
+        value={lowSlider}
+        min={0}
+        max={100}
+        step={1}
+        format={() => `${sliderToHz(lowSlider)} Hz`}
+        onChange={setLowSlider}
+        disabled={applying}
+      />
+      <SliderField
+        label="High cut"
+        value={highSlider}
+        min={0}
+        max={100}
+        step={1}
+        format={() => `${sliderToHz(highSlider)} Hz`}
+        onChange={setHighSlider}
+        disabled={applying}
+      />
+      <div className="flex items-center gap-3">
+        <Button size="sm" onClick={handleApply} disabled={applying}>
+          {applying ? 'Applying…' : 'Apply'}
+        </Button>
+        {result && (
+          <span className={resultError ? 'text-destructive text-sm' : 'text-sm text-muted-foreground'}>
+            {result}
+          </span>
+        )}
+        <span className="text-xs text-muted-foreground italic ml-auto">cava restarts briefly</span>
+      </div>
+    </div>
+  )
+}
+
 type Props = Pick<PreviewState, 'colour' | 'onset' | 'bars' | 'status'>
 
 export function NowPlaying({ colour, onset, bars, status }: Props) {
@@ -106,6 +197,19 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
           <SpectrumBars bars={bars} colorMode={status?.color_mode ?? null} />
         </CardContent>
       </Card>
+
+      {status?.active_profile_id && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">
+              Frequency cutoffs
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <FrequencyCutoffs profileId={status.active_profile_id} />
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="pb-3">

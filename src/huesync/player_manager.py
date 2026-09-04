@@ -247,6 +247,33 @@ class PlayerManager:
         for p in (session.fifo_path, session.cava_conf_path):
             p.unlink(missing_ok=True)
 
+    async def restart_cava(self) -> None:
+        """Restart cava within the active session without touching squeezelite or Hue.
+
+        Re-reads the profile from storage so that frequency-cutoff changes
+        saved via PATCH /api/profiles/{id} take effect.  Squeezelite keeps
+        running and the Hue Entertainment session stays open throughout.
+        """
+        if self._active is None:
+            raise RuntimeError("No active session")
+        session = self._active
+
+        profile = self.storage.get_profile(session.profile.id)
+        if profile is None:
+            raise RuntimeError("Active profile no longer in storage")
+        session.profile = profile
+
+        if session.cava and session.cava.poll() is None:
+            session.cava.terminate()
+            try:
+                session.cava.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                session.cava.kill()
+        session.cava = None
+
+        self._start_cava(session, profile)
+        log.info("cava restarted for profile %s", profile.name)
+
     async def refresh_probe(self) -> None:
         """Re-evaluate the latency probe for the current sync master.
 
