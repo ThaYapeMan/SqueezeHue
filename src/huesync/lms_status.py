@@ -30,6 +30,19 @@ class LmsPlayerStatus:
     sync_slaves: list[str] = field(default_factory=list)   # MACs of sync slaves
 
 
+def _recv_line(sock: socket.socket) -> bytes:
+    """Read bytes from *sock* until a newline is received, accumulating chunks."""
+    chunks: list[bytes] = []
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        if b"\n" in chunk:
+            break
+    return b"".join(chunks)
+
+
 def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayerStatus:
     """Query a single player's status from the LMS CLI.
 
@@ -44,20 +57,32 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
     log.debug("LMS query: %s:%d player=%s", host, port, mac)
     with socket.create_connection((host, port), timeout=_SOCKET_TIMEOUT_S) as sock:
         sock.sendall(command.encode("utf-8"))
-        chunks: list[bytes] = []
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            if b"\n" in chunk:
-                break
-    raw = b"".join(chunks).decode("utf-8", errors="replace").strip()
+        raw = _recv_line(sock).decode("utf-8", errors="replace").strip()
     log.debug("LMS raw response: %r", raw[:400])
     result = _parse_status(raw)
     log.debug("LMS parsed: player_name=%r sync_master=%r sync_slaves=%r",
               result.player_name, result.sync_master, result.sync_slaves)
     return result
+
+
+def query_lms_sync_peers(host: str, mac: str, port: int = DEFAULT_PORT) -> list[str]:
+    """Return the MAC addresses of all sync-group peers for *mac*.
+
+    Uses the LMS 'sync ?' CLI command, which reflects the *configured* sync
+    group regardless of play state.  The 'status' response only includes
+    sync_master when the player is actively playing; this command is the
+    reliable fallback for stopped/idle players.
+
+    Returns an empty list if the player is standalone.
+    Raises OSError / TimeoutError on connection or timeout errors.
+    """
+    command = f"{mac} sync ?\n"
+    log.debug("LMS sync? query: %s:%d player=%s", host, port, mac)
+    with socket.create_connection((host, port), timeout=_SOCKET_TIMEOUT_S) as sock:
+        sock.sendall(command.encode("utf-8"))
+        raw = _recv_line(sock).decode("utf-8", errors="replace").strip()
+    log.debug("LMS sync? raw response: %r", raw[:200])
+    return _parse_sync_response(raw)
 
 
 def _parse_status(text: str) -> LmsPlayerStatus:
@@ -94,6 +119,24 @@ def _parse_status(text: str) -> LmsPlayerStatus:
     return result
 
 
+def _parse_sync_response(text: str) -> list[str]:
+    """Parse the LMS 'sync ?' response into a list of peer MACs.
+
+    Wire format: '<encoded_playerid> sync <peers_or_dash>'
+    where <peers_or_dash> is '-' for standalone players or a comma-separated
+    (URL-encoded as %2C) list of URL-encoded peer MACs.  Returns an empty
+    list if the player is standalone or the response is malformed.
+    """
+    parts = text.split()
+    if len(parts) < 3:
+        return []
+    peers_raw = parts[2]
+    if peers_raw == "-":
+        return []
+    # Unquote first: %2C → comma, %3A → colon in MAC addresses.
+    return [p for p in unquote(peers_raw).split(",") if p and p != "-"]
+
+
 if __name__ == "__main__":
     import sys
 
@@ -106,3 +149,5 @@ if __name__ == "__main__":
     print(f"player_name:  {_status.player_name}")
     print(f"sync_master:  {_status.sync_master}")
     print(f"sync_slaves:  {_status.sync_slaves}")
+    _peers = query_lms_sync_peers(_host, _mac)
+    print(f"sync? peers:  {_peers}")

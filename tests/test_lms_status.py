@@ -1,7 +1,8 @@
-"""Tests for lms_status._parse_status.
+"""Tests for lms_status._parse_status and _parse_sync_response.
 
-query_lms_status() opens a real TCP socket, so it is not tested here.
-_parse_status() operates on a plain string and is fully testable in isolation.
+query_lms_status() and query_lms_sync_peers() open real TCP sockets, so they
+are not tested here.  The parser functions operate on plain strings and are
+fully testable in isolation.
 
 LMS CLI responses are fully URL-encoded, including the colon between key and
 value (%3A).  _build_response() produces that wire format so tests exercise
@@ -12,7 +13,7 @@ from urllib.parse import quote
 
 from pytest import approx
 
-from huesync.lms_status import LmsPlayerStatus, _parse_status
+from huesync.lms_status import LmsPlayerStatus, _parse_status, _parse_sync_response
 
 
 def _build_response(*fields: str) -> str:
@@ -146,3 +147,63 @@ def test_parse_fully_encoded_response():
     assert result.player_name == "HueSync"
     assert result.sync_master == "94:9f:3e:fa:ba:66"
     assert result.sync_slaves == ["02:ae:8a:b0:24:9b"]
+
+
+def test_parse_status_no_sync_master_when_stopped():
+    """LMS omits sync_master from the status response when the player is stopped.
+
+    This is the regression scenario: player_name parses correctly (confirming
+    the right player is found) but sync_master is absent — LMS only includes
+    it during active playback.  The poller falls back to 'sync ?' in this case.
+    """
+    text = (
+        "02%3Aae%3A8a%3Ab0%3A24%3A9b status 0 1 "
+        "player_name%3AHueSync "
+        "time%3A0.0"
+        # No sync_master or sync_slaves — player is stopped
+    )
+    result = _parse_status(text)
+    assert result.player_name == "HueSync"
+    assert result.sync_master is None
+    assert result.sync_slaves == []
+
+
+# ---------------------------------------------------------------------------
+# _parse_sync_response — the 'sync ?' fallback
+# ---------------------------------------------------------------------------
+
+
+def test_parse_sync_response_standalone():
+    """'-' means the player has no sync peers."""
+    assert _parse_sync_response("aa%3Abb%3Acc%3Add%3Aee%3Aff sync -") == []
+
+
+def test_parse_sync_response_single_peer():
+    """Single sync peer: Sonos MAC returned as the only peer."""
+    result = _parse_sync_response(
+        "02%3Aae%3A8a%3Ab0%3A24%3A9b sync 94%3A9f%3A3e%3Afa%3Aba%3A66"
+    )
+    assert result == ["94:9f:3e:fa:ba:66"]
+
+
+def test_parse_sync_response_multiple_peers():
+    """Multiple sync peers: commas are URL-encoded as %2C."""
+    result = _parse_sync_response(
+        "02%3Aae%3A8a%3Ab0%3A24%3A9b sync "
+        "94%3A9f%3A3e%3Afa%3Aba%3A66%2Ccc%3Add%3Aee%3Aff%3A00%3A11"
+    )
+    assert result == ["94:9f:3e:fa:ba:66", "cc:dd:ee:ff:00:11"]
+
+
+def test_parse_sync_response_empty():
+    """Empty or truncated response returns an empty list."""
+    assert _parse_sync_response("") == []
+    assert _parse_sync_response("02%3Aae sync") == []  # missing peers token
+
+
+def test_parse_sync_response_matches_production_mac():
+    """Regression: the Sonos MAC 94:9f:3e:fa:ba:66 survives the decode round-trip."""
+    peers = _parse_sync_response(
+        "02%3Aae%3A8a%3Ab0%3A24%3A9b sync 94%3A9f%3A3e%3Afa%3Aba%3A66"
+    )
+    assert peers == ["94:9f:3e:fa:ba:66"]

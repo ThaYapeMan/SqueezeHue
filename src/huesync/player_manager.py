@@ -21,7 +21,7 @@ from pathlib import Path
 from .hue_bridge import list_entertainment_areas
 from .hue_output import HueDriver, HueOutputConfig, get_channel_infos
 from .latency import FixedLatencyProbe, NoLatencyProbe
-from .lms_status import query_lms_status
+from .lms_status import query_lms_status, query_lms_sync_peers
 from .models import Profile
 from .storage import Storage
 from .sync_engine import SyncEngine
@@ -359,25 +359,61 @@ class PlayerManager:
         MAC actually changes, so routine steady-state polls are a no-op.
         Use refresh_probe() to force an immediate re-evaluation (e.g. after
         the user saves a PlayerLatency config for the current sync master).
+
+        Two-stage detection:
+          1. Primary:  'status' response — includes sync_master only when the
+             player is actively playing.  Gives the definitive LMS sync master.
+          2. Fallback: 'sync ?' command — always returns configured sync peers
+             regardless of play state.  Used when the status gives no master.
         """
         profile = session.profile
         current_master: str | None = _UNSET
         first = True
+        poll_n = 0
 
         while True:
             await asyncio.sleep(2 if first else 15)
             first = False
+            poll_n += 1
 
+            # --- Stage 1: status query ---
             try:
                 status = await asyncio.to_thread(
                     query_lms_status, profile.lms_host, profile.player_mac
                 )
                 new_master = status.sync_master
+                log.debug(
+                    "Poll #%d player=%s player_name=%r sync_master=%r sync_slaves=%r",
+                    poll_n, profile.player_mac,
+                    status.player_name, status.sync_master, status.sync_slaves,
+                )
             except Exception as exc:
-                log.info("LMS status poll failed for %s: %s", profile.player_mac, exc)
+                log.info("LMS status poll #%d failed for %s: %s", poll_n, profile.player_mac, exc)
                 continue
 
-            log.debug("Sync master poll: player=%s sync_master=%r", profile.player_mac, new_master)
+            # --- Stage 2: sync? fallback ---
+            # LMS omits sync_master from the status response when the player is
+            # stopped or idle (the sync group persists in LMS config but is not
+            # reflected in runtime status without active playback).
+            if new_master is None:
+                try:
+                    peers = await asyncio.to_thread(
+                        query_lms_sync_peers, profile.lms_host, profile.player_mac
+                    )
+                    log.debug("Poll #%d sync? peers=%r", poll_n, peers)
+                    if peers:
+                        # Prefer a peer that already has a PlayerLatency entry,
+                        # otherwise take the first peer (the probable Sonos master).
+                        new_master = next(
+                            (p for p in peers if self.storage.get_player_latency(p) is not None),
+                            peers[0],
+                        )
+                        log.debug(
+                            "Poll #%d sync? fallback -> master=%r", poll_n, new_master
+                        )
+                except Exception as exc:
+                    log.debug("Poll #%d sync? fallback failed for %s: %s",
+                              poll_n, profile.player_mac, exc)
 
             if new_master == current_master:
                 continue
