@@ -35,9 +35,8 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
 
     *mac* is sent verbatim — LMS matches players by raw MAC and silently
     fails to find them if the colons are URL-encoded.  The response is
-    split before URL-decoding so that player names containing spaces (which
-    arrive as %20) are parsed as a single token rather than being broken
-    into separate tokens after a premature global unquote.
+    fully URL-encoded by LMS, including the colon that separates keys from
+    values (%3A).  See _parse_status for the parsing strategy.
 
     Raises OSError / socket.timeout on connection or timeout errors.
     """
@@ -62,20 +61,23 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
 
 
 def _parse_status(text: str) -> LmsPlayerStatus:
-    """Parse the URL-encoded LMS status response into an LmsPlayerStatus.
+    """Parse the LMS CLI status response into an LmsPlayerStatus.
 
-    Splits on ASCII spaces first (while still URL-encoded, so %20 in player
-    names doesn't cause spurious splits), then unquotes each token's key and
-    value individually.  partition(":") splits on the first colon only, which
-    correctly handles MAC-valued fields such as sync_master:aa:bb:cc:dd:ee:ff.
+    LMS URL-encodes the full response, including the colon that separates
+    key from value (%3A).  The correct approach is therefore:
+
+      1. Split on literal spaces — these are never encoded, they delimit tokens.
+      2. Fully unquote each token — this decodes %3A to ":", %20 to " ", etc.
+      3. partition(":") on the decoded token — the first ":" is the key/value
+         separator; any further colons (e.g. in a MAC address) stay in the value.
+
+    This handles all observed LMS response formats in one pass.
     """
     result = LmsPlayerStatus()
     for token in text.split():
-        key, sep, value = token.partition(":")
+        key, sep, value = unquote(token).partition(":")
         if not sep:
             continue
-        key = unquote(key)
-        value = unquote(value)
         if key == "time":
             try:
                 result.time = float(value)
