@@ -9,12 +9,15 @@ Standalone usage: python -m huesync.lms_status <host> <mac>
 
 from __future__ import annotations
 
+import logging
 import socket
 from dataclasses import dataclass, field
 from urllib.parse import unquote
 
 DEFAULT_PORT: int = 9090
 _SOCKET_TIMEOUT_S: float = 3.0
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,6 +42,7 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
     Raises OSError / socket.timeout on connection or timeout errors.
     """
     command = f"{mac} status - 1 tags:\n"
+    log.info("LMS query: %s:%d player=%s", host, port, mac)
     with socket.create_connection((host, port), timeout=_SOCKET_TIMEOUT_S) as sock:
         sock.sendall(command.encode("utf-8"))
         chunks: list[bytes] = []
@@ -50,7 +54,11 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
             if b"\n" in chunk:
                 break
     raw = b"".join(chunks).decode("utf-8", errors="replace").strip()
-    return _parse_status(raw)
+    log.info("LMS raw response: %r", raw[:400])
+    result = _parse_status(raw)
+    log.info("LMS parsed: player_name=%r sync_master=%r sync_slaves=%r",
+             result.player_name, result.sync_master, result.sync_slaves)
+    return result
 
 
 def _parse_status(text: str) -> LmsPlayerStatus:

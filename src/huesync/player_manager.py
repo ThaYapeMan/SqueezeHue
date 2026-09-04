@@ -256,6 +256,7 @@ class PlayerManager:
             self.latency_warning = None
         else:
             pl = self.storage.get_player_latency(master)
+            log.info("PlayerLatency lookup for sync_master=%r -> %r", master, pl)
             if pl is None:
                 self.latency_warning = (
                     f"Sync master {master} has no latency config — "
@@ -307,12 +308,15 @@ class PlayerManager:
                 )
                 new_master = status.sync_master
             except Exception as exc:
-                log.debug("LMS status poll failed for %s: %s", profile.player_mac, exc)
+                log.info("LMS status poll failed for %s: %s", profile.player_mac, exc)
                 continue
+
+            log.info("Sync master poll: player=%s sync_master=%r", profile.player_mac, new_master)
 
             if new_master == current_master:
                 continue
 
+            log.info("Sync master changed: %r -> %r", current_master, new_master)
             current_master = new_master
             self._detected_sync_master = new_master
 

@@ -4,16 +4,6 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { PreviewState, SocketStatus } from '@/hooks/usePreviewSocket'
 
-// "SONOS::Study" → "Study (Sonos)", other names unchanged.
-function formatPlayerName(name: string): string {
-  const idx = name.indexOf('::')
-  if (idx < 0) return name
-  const type = name.slice(0, idx).trim()
-  const room = name.slice(idx + 2).trim()
-  const typeFmt = type ? type[0].toUpperCase() + type.slice(1).toLowerCase() : type
-  return `${room} (${typeFmt})`
-}
-
 function ProcessBadge({ running }: { running: boolean }) {
   return (
     <Badge variant={running ? 'default' : 'destructive'} className="text-xs">
@@ -49,9 +39,7 @@ function StatusGrid({ status }: { status: SocketStatus | null }) {
         {status.sync_master ? (
           <div>
             {status.sync_master_name && (
-              <div className="font-medium">
-                {formatPlayerName(status.sync_master_name)}
-              </div>
+              <div className="font-medium">{status.sync_master_name}</div>
             )}
             <code className="text-xs font-mono text-muted-foreground">
               {status.sync_master}

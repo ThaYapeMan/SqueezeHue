@@ -93,9 +93,11 @@ class Storage:
             return [PlayerLatency.from_dict(p) for p in self._read()["player_latencies"]]
 
     def get_player_latency(self, player_mac: str) -> PlayerLatency | None:
-        return next((p for p in self.list_player_latencies() if p.player_mac == player_mac), None)
+        mac = player_mac.strip().lower()
+        return next((p for p in self.list_player_latencies() if p.player_mac == mac), None)
 
     def save_player_latency(self, pl: PlayerLatency) -> None:
+        pl.player_mac = pl.player_mac.strip().lower()
         with _lock:
             data = self._read()
             data["player_latencies"] = [
@@ -105,10 +107,11 @@ class Storage:
             self._write(data)
 
     def delete_player_latency(self, player_mac: str) -> None:
+        mac = player_mac.strip().lower()
         with _lock:
             data = self._read()
             data["player_latencies"] = [
-                p for p in data["player_latencies"] if p["player_mac"] != player_mac
+                p for p in data["player_latencies"] if p["player_mac"] != mac
             ]
             self._write(data)
 
