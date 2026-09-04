@@ -131,6 +131,14 @@ class PlayerManager:
         return self._active.profile.name if self._active else None
 
     @property
+    def active_lower_cutoff_freq(self) -> int | None:
+        return self._active.profile.lower_cutoff_freq if self._active else None
+
+    @property
+    def active_higher_cutoff_freq(self) -> int | None:
+        return self._active.profile.higher_cutoff_freq if self._active else None
+
+    @property
     def active_color_mode(self) -> str | None:
         if self._active:
             return self._active.profile.color_mode.value

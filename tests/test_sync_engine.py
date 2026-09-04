@@ -165,7 +165,7 @@ def test_normaliser_ema_still_updates_during_silence():
     ema_after_silence = list(norm._ema)  # type: ignore[union-attr]
 
     # EMA should have decayed toward 0 during silence, not stayed frozen.
-    assert all(a < b for a, b in zip(ema_after_silence, ema_after_loud))
+    assert all(a < b for a, b in zip(ema_after_silence, ema_after_loud, strict=True))
 
 
 # ---------------------------------------------------------------------------

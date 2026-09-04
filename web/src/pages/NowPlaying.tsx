@@ -5,8 +5,9 @@ import { SliderField } from '@/components/SliderField'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import type { PreviewState, SocketStatus } from '@/hooks/usePreviewSocket'
-import { type Profile, getProfile, updateProfile, restartCava } from '@/lib/api'
+import { restartCava } from '@/lib/api'
 
 const LOG_MIN = Math.log10(20)
 const LOG_MAX = Math.log10(20000)
@@ -92,85 +93,51 @@ function StatusGrid({ status }: { status: SocketStatus | null }) {
   )
 }
 
-function FrequencyCutoffs({ profileId }: { profileId: string }) {
-  const [profile, setProfile] = useState<Profile | null>(null)
-  const [lowSlider, setLowSlider] = useState(50)
-  const [highSlider, setHighSlider] = useState(50)
+type Props = Pick<PreviewState, 'colour' | 'onset' | 'bars' | 'status'>
+
+export function NowPlaying({ colour, onset, bars, status }: Props) {
+  const profileId = status?.active_profile_id ?? null
+
+  // Slider values track the stored cutoff values for the active profile.
+  // Reset only when the active profile changes, not on every status tick,
+  // so the user's in-progress adjustments are preserved until Apply.
+  const [lowSlider, setLowSlider] = useState<number>(50)
+  const [highSlider, setHighSlider] = useState<number>(80)
   const [applying, setApplying] = useState(false)
-  const [result, setResult] = useState<string | null>(null)
-  const [resultError, setResultError] = useState(false)
+  const [applyResult, setApplyResult] = useState<string | null>(null)
+  const [applyError, setApplyError] = useState(false)
 
   useEffect(() => {
-    getProfile(profileId)
-      .then((p) => {
-        setProfile(p)
-        setLowSlider(hzToSlider(p.lower_cutoff_freq))
-        setHighSlider(hzToSlider(p.higher_cutoff_freq))
-      })
-      .catch(() => {})
-  }, [profileId])
+    if (status?.lower_cutoff_freq != null) {
+      setLowSlider(hzToSlider(status.lower_cutoff_freq))
+    }
+    if (status?.higher_cutoff_freq != null) {
+      setHighSlider(hzToSlider(status.higher_cutoff_freq))
+    }
+    setApplyResult(null)
+  }, [profileId])  // reset only on profile switch, not every WebSocket tick
 
   async function handleApply() {
-    if (!profile) return
+    if (!profileId) return
     setApplying(true)
-    setResult(null)
-    setResultError(false)
+    setApplyResult(null)
+    setApplyError(false)
+    const lowerHz = sliderToHz(lowSlider)
+    const higherHz = sliderToHz(highSlider)
     try {
-      const lowerHz = sliderToHz(lowSlider)
-      const higherHz = sliderToHz(highSlider)
-      await updateProfile(profile.id, { lower_cutoff_freq: lowerHz, higher_cutoff_freq: higherHz })
-      await restartCava(profile.id)
-      setResult('Applied.')
+      await restartCava(profileId, { lower_cutoff_freq: lowerHz, higher_cutoff_freq: higherHz })
+      setApplyResult('Applied.')
     } catch (e) {
-      setResult(e instanceof Error ? e.message : 'Failed')
-      setResultError(true)
+      setApplyResult(e instanceof Error ? e.message : 'Failed')
+      setApplyError(true)
     } finally {
       setApplying(false)
     }
   }
 
-  if (!profile) return null
+  const lowerHz  = sliderToHz(lowSlider)
+  const higherHz = sliderToHz(highSlider)
 
-  return (
-    <div className="space-y-4">
-      <SliderField
-        label="Low cut"
-        value={lowSlider}
-        min={0}
-        max={100}
-        step={1}
-        format={() => `${sliderToHz(lowSlider)} Hz`}
-        onChange={setLowSlider}
-        disabled={applying}
-      />
-      <SliderField
-        label="High cut"
-        value={highSlider}
-        min={0}
-        max={100}
-        step={1}
-        format={() => `${sliderToHz(highSlider)} Hz`}
-        onChange={setHighSlider}
-        disabled={applying}
-      />
-      <div className="flex items-center gap-3">
-        <Button size="sm" onClick={handleApply} disabled={applying}>
-          {applying ? 'Applying…' : 'Apply'}
-        </Button>
-        {result && (
-          <span className={resultError ? 'text-destructive text-sm' : 'text-sm text-muted-foreground'}>
-            {result}
-          </span>
-        )}
-        <span className="text-xs text-muted-foreground italic ml-auto">cava restarts briefly</span>
-      </div>
-    </div>
-  )
-}
-
-type Props = Pick<PreviewState, 'colour' | 'onset' | 'bars' | 'status'>
-
-export function NowPlaying({ colour, onset, bars, status }: Props) {
   return (
     <div className="space-y-4">
       <Card>
@@ -193,23 +160,56 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
             Spectrum
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <SpectrumBars bars={bars} colorMode={status?.color_mode ?? null} />
+        <CardContent className="space-y-4">
+          <SpectrumBars
+            bars={bars}
+            colorMode={status?.color_mode ?? null}
+            lowerCutoffHz={lowerHz}
+            higherCutoffHz={higherHz}
+          />
+
+          {profileId && (
+            <>
+              <Separator />
+              <div className="space-y-3">
+                <SliderField
+                  label="Low cut"
+                  value={lowSlider}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format={() => `${lowerHz} Hz`}
+                  onChange={setLowSlider}
+                  disabled={applying}
+                />
+                <SliderField
+                  label="High cut"
+                  value={highSlider}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format={() => `${higherHz} Hz`}
+                  onChange={setHighSlider}
+                  disabled={applying}
+                />
+                <div className="flex items-center gap-3">
+                  <Button size="sm" onClick={handleApply} disabled={applying}>
+                    {applying ? 'Applying…' : 'Apply'}
+                  </Button>
+                  {applyResult && (
+                    <span className={applyError ? 'text-destructive text-sm' : 'text-sm text-muted-foreground'}>
+                      {applyResult}
+                    </span>
+                  )}
+                  <span className="text-xs text-muted-foreground italic ml-auto">
+                    cava restarts briefly
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
-
-      {status?.active_profile_id && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">
-              Frequency cutoffs
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <FrequencyCutoffs profileId={status.active_profile_id} />
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader className="pb-3">

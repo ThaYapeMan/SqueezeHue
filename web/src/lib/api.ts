@@ -103,8 +103,10 @@ export const activateProfile = (id: string) =>
   request<{ active_id: string; warnings: string[] }>(`/api/profiles/${id}/activate`, { method: 'POST' })
 export const deactivateProfile = () =>
   request<{ active_id: null }>('/api/profiles/deactivate', { method: 'POST' })
-export const restartCava = (id: string) =>
-  request<{ ok: true }>(`/api/profiles/${id}/restart-cava`, { method: 'POST' })
+export const restartCava = (
+  id: string,
+  body: { lower_cutoff_freq?: number; higher_cutoff_freq?: number } = {}
+) => request<{ ok: true }>(`/api/profiles/${id}/restart-cava`, json('POST', body))
 
 // Player latencies
 export const getPlayerLatencies = () => request<PlayerLatency[]>('/api/player-latencies')

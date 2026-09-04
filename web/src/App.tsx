@@ -1,10 +1,20 @@
+import { useState } from 'react'
 import { usePreviewSocket } from '@/hooks/usePreviewSocket'
 import { NowPlaying } from '@/pages/NowPlaying'
 import { Profiles } from '@/pages/Profiles'
 import { Bridges } from '@/pages/Bridges'
 import { Latency } from '@/pages/Latency'
 import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
+
+type Tab = 'now-playing' | 'profiles' | 'bridges' | 'latency'
+
+const NAV_ITEMS: { value: Tab; label: string }[] = [
+  { value: 'now-playing', label: 'Now Playing' },
+  { value: 'profiles',    label: 'Profiles' },
+  { value: 'bridges',     label: 'Bridges' },
+  { value: 'latency',     label: 'Latency' },
+]
 
 function ConnectionBadge({ connected, attempt }: { connected: boolean; attempt: number }) {
   if (connected) {
@@ -18,12 +28,13 @@ function ConnectionBadge({ connected, attempt }: { connected: boolean; attempt: 
 }
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState<Tab>('now-playing')
   const { colour, onset, bars, status, connected, reconnectAttempt } = usePreviewSocket()
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border">
-        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
+    <div className="min-h-screen flex flex-col bg-background">
+      <header className="border-b border-border shrink-0">
+        <div className="px-4 py-4 flex items-center justify-between">
           <h1 className="text-lg font-semibold tracking-tight">HueSync</h1>
           <div className="flex items-center gap-3">
             {status?.version && (
@@ -34,62 +45,45 @@ export default function App() {
         </div>
       </header>
 
-      <Tabs defaultValue="now-playing">
-        <div className="border-b border-border">
-          <div className="max-w-2xl mx-auto px-4">
-            <TabsList className="h-auto rounded-none bg-transparent p-0 gap-0">
-              <TabsTrigger
-                value="now-playing"
-                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3 px-4"
-              >
-                Now Playing
-              </TabsTrigger>
-              <TabsTrigger
-                value="profiles"
-                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3 px-4"
-              >
-                Profiles
-              </TabsTrigger>
-              <TabsTrigger
-                value="bridges"
-                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3 px-4"
-              >
-                Bridges
-              </TabsTrigger>
-              <TabsTrigger
-                value="latency"
-                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3 px-4"
-              >
-                Latency
-              </TabsTrigger>
-            </TabsList>
+      <div className="flex flex-1 overflow-hidden">
+        <nav className="w-44 border-r border-border shrink-0 pt-2">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.value}
+              onClick={() => setActiveTab(item.value)}
+              className={cn(
+                'w-full text-left px-4 py-2.5 text-sm transition-colors',
+                activeTab === item.value
+                  ? 'bg-muted font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-xl mx-auto px-6 py-6">
+            {activeTab === 'now-playing' && (
+              <NowPlaying colour={colour} onset={onset} bars={bars} status={status} />
+            )}
+            {activeTab === 'profiles' && (
+              <Profiles
+                activeProfileId={status?.active_profile_id ?? null}
+                onActivationChange={() => {}}
+              />
+            )}
+            {activeTab === 'bridges' && <Bridges />}
+            {activeTab === 'latency' && (
+              <Latency
+                syncMaster={status?.sync_master ?? null}
+                syncMasterName={status?.sync_master_name ?? null}
+              />
+            )}
           </div>
-        </div>
-
-        <div className="max-w-2xl mx-auto px-4 py-6">
-          <TabsContent value="now-playing">
-            <NowPlaying colour={colour} onset={onset} bars={bars} status={status} />
-          </TabsContent>
-
-          <TabsContent value="profiles">
-            <Profiles
-              activeProfileId={status?.active_profile_id ?? null}
-              onActivationChange={() => {}}
-            />
-          </TabsContent>
-
-          <TabsContent value="bridges">
-            <Bridges />
-          </TabsContent>
-
-          <TabsContent value="latency">
-            <Latency
-              syncMaster={status?.sync_master ?? null}
-              syncMasterName={status?.sync_master_name ?? null}
-            />
-          </TabsContent>
-        </div>
-      </Tabs>
+        </main>
+      </div>
     </div>
   )
 }
