@@ -64,20 +64,22 @@ def _parse_status(text: str) -> LmsPlayerStatus:
     """Parse the LMS CLI status response into an LmsPlayerStatus.
 
     LMS URL-encodes the full response, including the colon that separates
-    key from value (%3A).  The correct approach is therefore:
+    key from value (arrives as %3A or occasionally %3a).  Splitting strategy:
 
       1. Split on literal spaces — these are never encoded, they delimit tokens.
-      2. Fully unquote each token — this decodes %3A to ":", %20 to " ", etc.
-      3. partition(":") on the decoded token — the first ":" is the key/value
-         separator; any further colons (e.g. in a MAC address) stay in the value.
-
-    This handles all observed LMS response formats in one pass.
+      2. Normalise %3a → %3A so only one form needs to be matched.
+      3. partition("%3A") to split key from value while both are still encoded —
+         this means a decoded colon in a MAC value can never be mistaken for
+         the structural separator.
+      4. Unquote key and value independently.
     """
     result = LmsPlayerStatus()
     for token in text.split():
-        key, sep, value = unquote(token).partition(":")
+        key_raw, sep, value_raw = token.replace("%3a", "%3A").partition("%3A")
         if not sep:
             continue
+        key = unquote(key_raw)
+        value = unquote(value_raw)
         if key == "time":
             try:
                 result.time = float(value)

@@ -26,7 +26,7 @@ function StatusGrid({ status }: { status: SocketStatus | null }) {
     return <p className="text-sm text-muted-foreground">Waiting for data…</p>
   }
   return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-8 gap-y-2 text-sm items-center">
+    <dl className="grid grid-cols-[auto_1fr] gap-x-8 gap-y-2 text-sm items-start">
       <StatusRow label="Profile">
         {status.active_profile_name ? (
           <span className="font-medium">{status.active_profile_name}</span>
