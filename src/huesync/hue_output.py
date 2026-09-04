@@ -23,7 +23,6 @@ from hue_entertainment import EntertainmentSession, HueEntertainmentAPI, LightCo
 from .models import BridgeConfig
 from .types import Colour, Position, Scene
 
-
 # ---------------------------------------------------------------------------
 # Configuration and channel info
 # ---------------------------------------------------------------------------

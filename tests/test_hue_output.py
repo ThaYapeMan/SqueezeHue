@@ -10,7 +10,6 @@ from huesync.hue_output import ChannelInfo, HueDriver, HueOutputConfig
 from huesync.models import BridgeConfig
 from huesync.types import Colour, Position, UniformScene
 
-
 # ---------------------------------------------------------------------------
 # Stub helpers
 # ---------------------------------------------------------------------------

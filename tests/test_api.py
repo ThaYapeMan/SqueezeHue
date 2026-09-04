@@ -16,7 +16,6 @@ from huesync.app import app
 from huesync.models import BridgeConfig, Profile
 from huesync.storage import Storage
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

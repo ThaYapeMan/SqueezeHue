@@ -7,7 +7,6 @@ main thing worth unit-testing here.  Live network discovery is not tested
 
 from huesync.lms_discovery import _parse_tlv_response
 
-
 # ---------------------------------------------------------------------------
 # Helper: build a synthetic TLV response
 # ---------------------------------------------------------------------------
