@@ -9,6 +9,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __git_hash__, __version__
@@ -29,13 +30,9 @@ player_manager = PlayerManager(storage)
 
 app.state.storage = storage
 app.state.player_manager = player_manager
-app.include_router(api_router)
 
-# Serve the React SPA at /. html=True makes StaticFiles serve index.html for
-# unknown paths so client-side routing works (only relevant if we add it later).
-_WEBUI_DIR = BASE_DIR / "webui"
-if _WEBUI_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(_WEBUI_DIR), html=True), name="webui")
+# API routes first so /api/* paths are claimed before the SPA catch-all.
+app.include_router(api_router)
 
 
 @app.on_event("startup")
@@ -104,6 +101,30 @@ async def ws_preview(websocket: WebSocket):
         pass
     with contextlib.suppress(Exception):
         await websocket.close()
+
+
+# -- React SPA ------------------------------------------------------------------
+# Mount strategy: serve /assets/* as plain static files so that StaticFiles
+# never sees a WebSocket scope (it asserts scope["type"] == "http" and would
+# crash on the /ws/preview upgrade).  Root and every other path return
+# index.html so client-side routing works.
+
+_WEBUI_DIR = BASE_DIR / "webui"
+
+if _WEBUI_DIR.exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_WEBUI_DIR / "assets")),
+        name="assets",
+    )
+
+    @app.get("/")
+    async def serve_root() -> FileResponse:
+        return FileResponse(str(_WEBUI_DIR / "index.html"))
+
+    @app.get("/{path:path}")
+    async def serve_spa(path: str) -> FileResponse:  # noqa: ARG001
+        return FileResponse(str(_WEBUI_DIR / "index.html"))
 
 
 def main() -> None:

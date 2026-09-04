@@ -184,7 +184,7 @@ class BandNormaliser:
             self._ema = [float(v) for v in frame]
 
         a = self.alpha
-        self._ema = [ema * (1.0 - a) + v * a for ema, v in zip(self._ema, frame)]
+        self._ema = [ema * (1.0 - a) + v * a for ema, v in zip(self._ema, frame, strict=True)]
 
         # Silence gate: if the mean raw bar is negligible, keep the lights
         # dark rather than amplifying noise into meaningless colour flashes.
@@ -192,7 +192,7 @@ class BandNormaliser:
             return bytes(n)
 
         result = bytearray(n)
-        for i, (v, ema) in enumerate(zip(frame, self._ema)):
+        for i, (v, ema) in enumerate(zip(frame, self._ema, strict=True)):
             # Guard against a zero EMA (e.g. a bar that has been silent for
             # the entire session so far).
             exertion = v / max(ema, 1.0)
@@ -268,7 +268,7 @@ class OnsetDetector:
             return False, 0.0
 
         # Spectral flux: sum of positive differences only (rising energy).
-        flux = sum(max(0.0, b - p) for b, p in zip(bars, self._prev_bars))
+        flux = sum(max(0.0, b - p) for b, p in zip(bars, self._prev_bars, strict=True))
         self._prev_bars = list(bars)
 
         # Running mean and variance for normalisation.  Use pre-update mean so

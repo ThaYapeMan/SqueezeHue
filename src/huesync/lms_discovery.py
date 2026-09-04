@@ -86,7 +86,7 @@ def _discover_blocking(timeout: float) -> list[DiscoveredLMS]:
             sock.settimeout(remaining)
             try:
                 data, addr = sock.recvfrom(1024)
-            except (socket.timeout, OSError):
+            except (TimeoutError, OSError):
                 break
 
             host = addr[0]

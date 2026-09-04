@@ -38,7 +38,7 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
     fully URL-encoded by LMS, including the colon that separates keys from
     values (%3A).  See _parse_status for the parsing strategy.
 
-    Raises OSError / socket.timeout on connection or timeout errors.
+    Raises OSError / TimeoutError on connection or timeout errors.
     """
     command = f"{mac} status - 1 tags:\n"
     log.debug("LMS query: %s:%d player=%s", host, port, mac)

@@ -139,7 +139,7 @@ class HueDriver:
         self.last_colours = colours
         commands = [
             LightColorCommand(channel_id=ch.channel_id, red=r, green=g, blue=b)
-            for ch, (r, g, b) in zip(self._channels, (c.to_16bit() for c in colours))
+            for ch, (r, g, b) in zip(self._channels, (c.to_16bit() for c in colours), strict=True)
         ]
         self._session.send(commands)
 
