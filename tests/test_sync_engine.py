@@ -5,6 +5,7 @@ from huesync.sync_engine import (
     BandNormaliser,
     ColourModeEffect,
     OnsetDetector,
+    SyncEngine,
     _band_average,
     _band_avg,
     _hz_to_frac,
@@ -355,3 +356,59 @@ def test_profile_band_boundary_defaults_within_cutoff_range():
     p = Profile()
     assert p.lower_cutoff_freq < p.bass_hz < p.higher_cutoff_freq
     assert p.bass_hz < p.mid_hz < p.higher_cutoff_freq
+
+
+# ---------------------------------------------------------------------------
+# ColourModeEffect — band boundary shift
+# ---------------------------------------------------------------------------
+
+
+def test_colour_mode_effect_bass_hz_shifts_red_green_boundary():
+    """Raising bass_hz moves the red/green split: more bars fall in bass (red)."""
+    bars = [0.0] * 30
+    # Bars 5–9 are active; below the default bass boundary (250 Hz → ~bar 15 of 30).
+    for i in range(5, 10):
+        bars[i] = 1.0
+
+    # With default bass_hz (250 Hz) those bars land in the bass band → R > 0.
+    profile_default = Profile(color_mode=ColorMode.SPECTRUM_RGB, bars=30)
+    colour_default = (
+        ColourModeEffect(profile_default).render(_make_features(bars), 0.0).color_at(_ORIGIN, 0.0)
+    )
+
+    # With a very low bass_hz (e.g. 60 Hz) bars 5–9 move into mid → G > 0, R small.
+    profile_low_bass = Profile(color_mode=ColorMode.SPECTRUM_RGB, bars=30, bass_hz=60)
+    colour_low_bass = (
+        ColourModeEffect(profile_low_bass).render(_make_features(bars), 0.0).color_at(_ORIGIN, 0.0)
+    )
+
+    assert colour_default.r > colour_low_bass.r, "Lowering bass_hz should reduce red"
+    assert colour_low_bass.g > colour_default.g, "Lowering bass_hz should increase green"
+
+
+def test_sync_engine_update_profile_takes_effect():
+    """update_profile() must replace the ColourModeEffect so that a new bass_hz
+    is immediately reflected in the rendered colour without restarting the engine.
+    """
+    fifo = "/tmp/_nonexistent_fifo_for_test"  # SyncEngine only opens FIFO on start()
+    profile_a = Profile(color_mode=ColorMode.SPECTRUM_RGB, bars=30, bass_hz=250)
+    engine = SyncEngine(fifo, profile_a)
+
+    # A bar pattern where bars 5–9 are active (in bass band for default bass_hz).
+    bars = [0.0] * 30
+    for i in range(5, 10):
+        bars[i] = 1.0
+    features = _make_features(bars)
+
+    effect = engine._effect  # type: ignore[union-attr]
+    colour_before = effect.render(features, 0.0).color_at(_ORIGIN, 0.0)
+
+    # Update to a very low bass_hz so those bars shift into mid (green).
+    profile_b = Profile(color_mode=ColorMode.SPECTRUM_RGB, bars=30, bass_hz=60)
+    engine.update_profile(profile_b)
+
+    new_effect = engine._effect  # type: ignore[union-attr]
+    colour_after = new_effect.render(features, 0.0).color_at(_ORIGIN, 0.0)
+
+    assert colour_before.r > colour_after.r, "After update_profile, red should decrease"
+    assert colour_after.g > colour_before.g, "After update_profile, green should increase"

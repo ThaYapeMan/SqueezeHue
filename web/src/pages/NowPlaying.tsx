@@ -98,34 +98,66 @@ type Props = Pick<PreviewState, 'colour' | 'onset' | 'bars' | 'status'>
 export function NowPlaying({ colour, onset, bars, status }: Props) {
   const profileId = status?.active_profile_id ?? null
 
-  // Slider values track the stored cutoff values for the active profile.
-  // Reset only when the active profile changes, not on every status tick,
-  // so the user's in-progress adjustments are preserved until Apply.
-  const [lowSlider, setLowSlider] = useState<number>(50)
-  const [highSlider, setHighSlider] = useState<number>(80)
+  // Cutoff sliders — reset only when the active profile changes.
+  const [lowSlider, setLowSlider] = useState<number>(hzToSlider(50))
+  const [highSlider, setHighSlider] = useState<number>(hzToSlider(12000))
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<string | null>(null)
   const [applyError, setApplyError] = useState(false)
 
+  // Band boundary sliders — reset only when the active profile changes.
+  const [bassSlider, setBassSlider] = useState<number>(hzToSlider(250))
+  const [midSlider, setMidSlider] = useState<number>(hzToSlider(2000))
+  const [applyingBands, setApplyingBands] = useState(false)
+  const [bandResult, setBandResult] = useState<string | null>(null)
+  const [bandError, setBandError] = useState(false)
+
   useEffect(() => {
-    if (status?.lower_cutoff_freq != null) {
-      setLowSlider(hzToSlider(status.lower_cutoff_freq))
-    }
-    if (status?.higher_cutoff_freq != null) {
-      setHighSlider(hzToSlider(status.higher_cutoff_freq))
-    }
+    if (status?.lower_cutoff_freq != null) setLowSlider(hzToSlider(status.lower_cutoff_freq))
+    if (status?.higher_cutoff_freq != null) setHighSlider(hzToSlider(status.higher_cutoff_freq))
+    if (status?.bass_hz != null) setBassSlider(hzToSlider(status.bass_hz))
+    if (status?.mid_hz != null) setMidSlider(hzToSlider(status.mid_hz))
     setApplyResult(null)
-  }, [profileId])  // reset only on profile switch, not every WebSocket tick
+    setBandResult(null)
+  }, [profileId])
+
+  // Applied values (what cava is actually using) — drive the spectrum display.
+  const appliedLower  = status?.lower_cutoff_freq  ?? 50
+  const appliedHigher = status?.higher_cutoff_freq ?? 12000
+  const appliedBass   = status?.bass_hz            ?? 250
+  const appliedMid    = status?.mid_hz             ?? 2000
+
+  // Pending values from the sliders.
+  const pendingLower  = sliderToHz(lowSlider)
+  const pendingHigher = sliderToHz(highSlider)
+  const pendingBass   = sliderToHz(bassSlider)
+  const pendingMid    = sliderToHz(midSlider)
+
+  const hasChanges     = pendingLower !== appliedLower || pendingHigher !== appliedHigher
+  const hasBandChanges = pendingBass  !== appliedBass  || pendingMid    !== appliedMid
+
+  // Constraint: bass_hz < mid_hz; both within the applied cutoff range.
+  function handleBassChange(v: number) {
+    const hz = sliderToHz(v)
+    if (hz >= pendingMid) return           // would violate bass < mid
+    if (hz <= appliedLower) return         // below low cut
+    setBassSlider(v)
+  }
+
+  function handleMidChange(v: number) {
+    const hz = sliderToHz(v)
+    if (hz <= pendingBass) return          // would violate bass < mid
+    if (hz >= appliedHigher) return        // above high cut
+    setMidSlider(v)
+  }
 
   async function handleApply() {
     if (!profileId) return
     setApplying(true)
     setApplyResult(null)
     setApplyError(false)
-    const lowerHz = sliderToHz(lowSlider)
-    const higherHz = sliderToHz(highSlider)
     try {
-      await restartCava(profileId, { lower_cutoff_freq: lowerHz, higher_cutoff_freq: higherHz })
+      await restartCava(profileId, { lower_cutoff_freq: pendingLower, higher_cutoff_freq: pendingHigher })
       setApplyResult('Applied.')
     } catch (e) {
       setApplyResult(e instanceof Error ? e.message : 'Failed')
@@ -135,19 +167,30 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
     }
   }
 
-  // Applied values (what cava is actually using) — drive the spectrum display.
-  const appliedLower  = status?.lower_cutoff_freq  ?? 50
-  const appliedHigher = status?.higher_cutoff_freq ?? 12000
-
-  // Pending values from the sliders (what would be applied on click).
-  const pendingLower  = sliderToHz(lowSlider)
-  const pendingHigher = sliderToHz(highSlider)
-
-  const hasChanges = pendingLower !== appliedLower || pendingHigher !== appliedHigher
-
   function handleReset() {
     setLowSlider(hzToSlider(status?.lower_cutoff_freq ?? 50))
     setHighSlider(hzToSlider(status?.higher_cutoff_freq ?? 12000))
+  }
+
+  async function handleApplyBands() {
+    if (!profileId) return
+    setApplyingBands(true)
+    setBandResult(null)
+    setBandError(false)
+    try {
+      await restartCava(profileId, { bass_hz: pendingBass, mid_hz: pendingMid })
+      setBandResult('Applied.')
+    } catch (e) {
+      setBandResult(e instanceof Error ? e.message : 'Failed')
+      setBandError(true)
+    } finally {
+      setApplyingBands(false)
+    }
+  }
+
+  function handleResetBands() {
+    setBassSlider(hzToSlider(status?.bass_hz ?? 250))
+    setMidSlider(hzToSlider(status?.mid_hz ?? 2000))
   }
 
   return (
@@ -178,44 +221,47 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
             colorMode={status?.color_mode ?? null}
             lowerCutoffHz={appliedLower}
             higherCutoffHz={appliedHigher}
-            bassHz={status?.bass_hz ?? 250}
-            midHz={status?.mid_hz ?? 2000}
+            bassHz={appliedBass}
+            midHz={appliedMid}
           />
 
           {profileId && (
             <>
               <Separator />
+              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
+                Band boundaries
+              </p>
               <div className="space-y-3">
                 <SliderField
-                  label="Low cut"
-                  value={lowSlider}
+                  label="Bass / mid"
+                  value={bassSlider}
                   min={0}
                   max={100}
                   step={1}
-                  format={() => `${pendingLower} Hz`}
-                  onChange={setLowSlider}
-                  disabled={applying}
+                  format={() => `${pendingBass} Hz`}
+                  onChange={handleBassChange}
+                  disabled={applyingBands}
                 />
                 <SliderField
-                  label="High cut"
-                  value={highSlider}
+                  label="Mid / treble"
+                  value={midSlider}
                   min={0}
                   max={100}
                   step={1}
-                  format={() => `${pendingHigher} Hz`}
-                  onChange={setHighSlider}
-                  disabled={applying}
+                  format={() => `${pendingMid} Hz`}
+                  onChange={handleMidChange}
+                  disabled={applyingBands}
                 />
                 <div className="flex items-center gap-3">
-                  <Button size="sm" onClick={handleApply} disabled={applying || !hasChanges}>
-                    {applying ? 'Applying…' : 'Apply'}
+                  <Button size="sm" onClick={handleApplyBands} disabled={applyingBands || !hasBandChanges}>
+                    {applyingBands ? 'Applying…' : 'Apply'}
                   </Button>
-                  <Button size="sm" variant="outline" onClick={handleReset} disabled={applying}>
+                  <Button size="sm" variant="outline" onClick={handleResetBands} disabled={applyingBands}>
                     Reset
                   </Button>
-                  {applyResult && (
-                    <span className={applyError ? 'text-destructive text-sm' : 'text-sm text-muted-foreground'}>
-                      {applyResult}
+                  {bandResult && (
+                    <span className={bandError ? 'text-destructive text-sm' : 'text-sm text-muted-foreground'}>
+                      {bandResult}
                     </span>
                   )}
                   <span className="text-xs text-muted-foreground italic ml-auto">
@@ -227,6 +273,54 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
           )}
         </CardContent>
       </Card>
+
+      {profileId && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">
+              Frequency cutoffs
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <SliderField
+              label="Low cut"
+              value={lowSlider}
+              min={0}
+              max={100}
+              step={1}
+              format={() => `${pendingLower} Hz`}
+              onChange={setLowSlider}
+              disabled={applying}
+            />
+            <SliderField
+              label="High cut"
+              value={highSlider}
+              min={0}
+              max={100}
+              step={1}
+              format={() => `${pendingHigher} Hz`}
+              onChange={setHighSlider}
+              disabled={applying}
+            />
+            <div className="flex items-center gap-3">
+              <Button size="sm" onClick={handleApply} disabled={applying || !hasChanges}>
+                {applying ? 'Applying…' : 'Apply'}
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleReset} disabled={applying}>
+                Reset
+              </Button>
+              {applyResult && (
+                <span className={applyError ? 'text-destructive text-sm' : 'text-sm text-muted-foreground'}>
+                  {applyResult}
+                </span>
+              )}
+              <span className="text-xs text-muted-foreground italic ml-auto">
+                cava restarts briefly
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="pb-3">

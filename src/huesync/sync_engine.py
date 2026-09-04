@@ -550,6 +550,11 @@ class SyncEngine:
         """Swap the latency probe live. Safe to call from the asyncio event loop."""
         self._probe = probe
 
+    def update_profile(self, profile: Profile) -> None:
+        """Rebuild the effect with a new profile. Call after saving band/cutoff changes."""
+        self.profile = profile
+        self._effect = ColourModeEffect(profile)
+
     @property
     def last_onset(self) -> bool:
         return self._last_onset

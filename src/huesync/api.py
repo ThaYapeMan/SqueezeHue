@@ -245,16 +245,18 @@ async def delete_profile(profile_id: str, request: Request):
 
 
 class RestartCavaBody(BaseModel):
-    """Optionally update frequency cutoffs while restarting cava.
+    """Optionally update frequency cutoffs and/or band boundaries while restarting cava.
 
     Saving these here (rather than via PATCH /profiles/{id}) avoids the
     patch_profile logic that deactivates the running session when any field
-    changes on an active profile.  Cutoff changes only need a cava restart;
+    changes on an active profile.  These changes only need a cava restart;
     squeezelite and the Hue session stay up.
     """
 
     lower_cutoff_freq: int | None = None
     higher_cutoff_freq: int | None = None
+    bass_hz: int | None = None
+    mid_hz: int | None = None
 
 
 @router.post("/profiles/{profile_id}/restart-cava")
@@ -265,7 +267,10 @@ async def restart_cava(profile_id: str, request: Request, body: RestartCavaBody)
     if manager.active_profile_id != profile_id:
         raise HTTPException(status_code=400, detail="Profile is not active")
 
-    if body.lower_cutoff_freq is not None or body.higher_cutoff_freq is not None:
+    has_updates = any(v is not None for v in (
+        body.lower_cutoff_freq, body.higher_cutoff_freq, body.bass_hz, body.mid_hz
+    ))
+    if has_updates:
         profile = storage.get_profile(profile_id)
         if profile is None:
             raise HTTPException(status_code=404, detail="Profile not found")
@@ -273,6 +278,10 @@ async def restart_cava(profile_id: str, request: Request, body: RestartCavaBody)
             profile.lower_cutoff_freq = body.lower_cutoff_freq
         if body.higher_cutoff_freq is not None:
             profile.higher_cutoff_freq = body.higher_cutoff_freq
+        if body.bass_hz is not None:
+            profile.bass_hz = body.bass_hz
+        if body.mid_hz is not None:
+            profile.mid_hz = body.mid_hz
         storage.save_profile(profile)
 
     try:

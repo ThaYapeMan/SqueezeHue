@@ -288,6 +288,8 @@ class PlayerManager:
         if profile is None:
             raise RuntimeError("Active profile no longer in storage")
         session.profile = profile
+        if session.sync_engine is not None:
+            session.sync_engine.update_profile(profile)
 
         if session.cava and session.cava.poll() is None:
             session.cava.terminate()
