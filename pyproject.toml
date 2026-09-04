@@ -1,6 +1,6 @@
 [project]
 name = "huesync"
-version = "0.1.0"
+version = "0.2.0"
 description = "Beat/spectrum-reactive Philips Hue Entertainment sync for Lyrion Music Server, via a virtual squeezelite player and cava."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,9 +28,11 @@ huesync = "huesync.app:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.hooks.custom]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/huesync"]
-# webui/ (built React app) lives under src/huesync/ and is included automatically.
+# webui/ (built React app) and _commit.py live under src/huesync/ and are included automatically.
 
 [tool.ruff]
 line-length = 100

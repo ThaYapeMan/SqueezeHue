@@ -21,7 +21,12 @@ export default function App() {
       <header className="border-b border-border">
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="text-lg font-semibold tracking-tight">HueSync</h1>
-          <ConnectionBadge connected={connected} attempt={reconnectAttempt} />
+          <div className="flex items-center gap-3">
+            {status?.version && (
+              <span className="text-xs text-muted-foreground font-mono">{status.version}</span>
+            )}
+            <ConnectionBadge connected={connected} attempt={reconnectAttempt} />
+          </div>
         </div>
       </header>
 

@@ -22,6 +22,7 @@ class LmsPlayerStatus:
     """Parsed subset of the LMS CLI status response for one player."""
 
     time: float | None = None
+    player_name: str | None = None      # display name of the queried player
     sync_master: str | None = None      # MAC of the sync-group master, None if standalone
     sync_slaves: list[str] = field(default_factory=list)   # MACs of sync slaves
 
@@ -31,7 +32,9 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
 
     *mac* is sent verbatim — LMS matches players by raw MAC and silently
     fails to find them if the colons are URL-encoded.  The response is
-    URL-decoded before parsing.
+    split before URL-decoding so that player names containing spaces (which
+    arrive as %20) are parsed as a single token rather than being broken
+    into separate tokens after a premature global unquote.
 
     Raises OSError / socket.timeout on connection or timeout errors.
     """
@@ -47,27 +50,31 @@ def query_lms_status(host: str, mac: str, port: int = DEFAULT_PORT) -> LmsPlayer
             if b"\n" in chunk:
                 break
     raw = b"".join(chunks).decode("utf-8", errors="replace").strip()
-    return _parse_status(unquote(raw))
+    return _parse_status(raw)
 
 
 def _parse_status(text: str) -> LmsPlayerStatus:
-    """Parse the URL-decoded LMS status response into an LmsPlayerStatus.
+    """Parse the URL-encoded LMS status response into an LmsPlayerStatus.
 
-    Tokens are space-separated key:value pairs.  partition(":") splits on the
-    first colon only, which correctly handles MAC-valued fields such as
-    sync_master:aa:bb:cc:dd:ee:ff — key becomes "sync_master", value becomes
-    "aa:bb:cc:dd:ee:ff".
+    Splits on ASCII spaces first (while still URL-encoded, so %20 in player
+    names doesn't cause spurious splits), then unquotes each token's key and
+    value individually.  partition(":") splits on the first colon only, which
+    correctly handles MAC-valued fields such as sync_master:aa:bb:cc:dd:ee:ff.
     """
     result = LmsPlayerStatus()
     for token in text.split():
         key, sep, value = token.partition(":")
         if not sep:
             continue
+        key = unquote(key)
+        value = unquote(value)
         if key == "time":
             try:
                 result.time = float(value)
             except ValueError:
                 pass
+        elif key == "player_name":
+            result.player_name = value or None
         elif key == "sync_master":
             result.sync_master = value or None
         elif key == "sync_slaves":
@@ -84,5 +91,6 @@ if __name__ == "__main__":
     _host, _mac = sys.argv[1], sys.argv[2]
     _status = query_lms_status(_host, _mac)
     print(f"time:         {_status.time}")
+    print(f"player_name:  {_status.player_name}")
     print(f"sync_master:  {_status.sync_master}")
     print(f"sync_slaves:  {_status.sync_slaves}")

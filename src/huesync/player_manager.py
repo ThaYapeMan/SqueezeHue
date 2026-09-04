@@ -53,11 +53,16 @@ class PlayerManager:
         self._active: ActiveSession | None = None
         self.latency_warning: str | None = None
         self._detected_sync_master: str | None = None
+        self._detected_sync_master_name: str | None = None
         _RUN_DIR.mkdir(parents=True, exist_ok=True)
 
     @property
     def detected_sync_master(self) -> str | None:
         return self._detected_sync_master
+
+    @property
+    def detected_sync_master_name(self) -> str | None:
+        return self._detected_sync_master_name
 
     @property
     def active_profile_id(self) -> str | None:
@@ -107,6 +112,10 @@ class PlayerManager:
         if self._active and self._active.sync_engine:
             return self._active.sync_engine.last_bars
         return []
+
+    @property
+    def active_profile_name(self) -> str | None:
+        return self._active.profile.name if self._active else None
 
     @property
     def active_color_mode(self) -> str | None:
@@ -194,6 +203,7 @@ class PlayerManager:
         self._active = None
         self.latency_warning = None
         self._detected_sync_master = None
+        self._detected_sync_master_name = None
         await self._teardown_session(session)
         self.storage.set_active_profile_id(None)
         log.info("Deactivated profile %s", session.profile.name)
@@ -305,6 +315,22 @@ class PlayerManager:
 
             current_master = new_master
             self._detected_sync_master = new_master
+
+            # Fetch the sync master's display name for the status UI.
+            # Only query when there is an external master (not standalone and
+            # not HueSync itself leading the sync group).
+            if new_master and new_master != profile.player_mac:
+                try:
+                    master_status = await asyncio.to_thread(
+                        query_lms_status, profile.lms_host, new_master
+                    )
+                    self._detected_sync_master_name = master_status.player_name
+                except Exception as exc:
+                    log.debug("Could not fetch name for sync master %s: %s", new_master, exc)
+                    self._detected_sync_master_name = None
+            else:
+                self._detected_sync_master_name = None
+
             await self._apply_probe_for_master(session, new_master)
 
     # ALSA output device for the virtual player. This is deliberately NOT

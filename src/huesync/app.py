@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import hue_bridge
+from . import __git_hash__, __version__, hue_bridge
 from .api import router as api_router
 from .lms_discovery import discover_lms
 from .models import ColorMode, PlayerLatency, Profile
@@ -294,8 +294,11 @@ async def ws_preview(websocket: WebSocket):
 
             status_dict = {
                 "type": "status",
+                "version": f"{__version__}+{__git_hash__}",
                 "active_profile_id": player_manager.active_profile_id,
+                "active_profile_name": player_manager.active_profile_name,
                 "sync_master": player_manager.detected_sync_master,
+                "sync_master_name": player_manager.detected_sync_master_name,
                 "applied_delay_ms": player_manager.applied_delay_ms,
                 "latency_warning": player_manager.latency_warning,
                 "processes": player_manager.process_status,

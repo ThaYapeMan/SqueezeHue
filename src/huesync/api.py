@@ -11,12 +11,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from . import hue_bridge
+from . import __git_hash__, __version__, hue_bridge
 from .lms_discovery import discover_lms
 from .models import ColorMode, PlayerLatency, Profile
 from .player_manager import PlayerManager
 from .storage import Storage
 from .util import generate_locally_administered_mac
+
+_VERSION_STRING = f"{__version__}+{__git_hash__}"
 
 router = APIRouter(prefix="/api")
 
@@ -324,8 +326,11 @@ async def lms_discover():
 async def get_status(request: Request):
     manager = _manager(request)
     return {
+        "version": _VERSION_STRING,
         "active_profile_id": manager.active_profile_id,
+        "active_profile_name": manager.active_profile_name,
         "sync_master": manager.detected_sync_master,
+        "sync_master_name": manager.detected_sync_master_name,
         "applied_delay_ms": manager.applied_delay_ms,
         "latency_warning": manager.latency_warning,
         "processes": manager.process_status,

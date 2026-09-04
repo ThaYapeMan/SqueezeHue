@@ -89,6 +89,9 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install .
 ```
 
+The build step captures the current git commit hash and embeds it in the
+package so `GET /api/status` can report the exact build running on the target.
+
 Run it:
 
 ```bash
@@ -164,7 +167,7 @@ is at **`/docs`**.
 Key endpoints:
 
 ```
-GET  /api/status              active profile, sync master, delay, process status
+GET  /api/status              version, active profile, sync master, delay, process status
 GET  /api/profiles            list profiles
 POST /api/profiles            create profile
 PATCH /api/profiles/{id}      partial update (live parameter changes)
@@ -178,8 +181,14 @@ The WebSocket at `/ws/preview` sends typed JSON messages:
 ```jsonc
 { "type": "frame",    "colour": {"r": 0, "g": 0, "b": 0}, "onset": false }
 { "type": "spectrum", "bars": [0.1, 0.4, …] }   // 10 Hz
-{ "type": "status",   "active_profile_id": "…", … }  // on change only
+{ "type": "status",   "version": "0.2.0+abc1234",
+                       "active_profile_id": "…", "active_profile_name": "…",
+                       "sync_master": "aa:bb:…", "sync_master_name": "SONOS::Study",
+                       … }  // on change only
 ```
+
+`sync_master_name` carries the raw LMS player name. The UI formats it for
+display (e.g. `"SONOS::Study"` → `"Study (Sonos)"`).
 
 ## Architecture — effect pipeline
 
@@ -229,6 +238,7 @@ git add src/huesync/webui/
 ```
 
 Deploy as usual (`git pull && pip install . && systemctl restart huesync`).
+The `pip install .` step re-embeds the git commit hash into the package.
 The built UI is temporarily served at `/new`; the classic HTML UI stays on `/`
 during the transition.
 

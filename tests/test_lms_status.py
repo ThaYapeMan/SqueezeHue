@@ -56,8 +56,23 @@ def test_parse_standalone_player():
     text = _build_response("time:55.1", "player_name:HueSync")
     result = _parse_status(text)
     assert result.time == approx(55.1)
+    assert result.player_name == "HueSync"
     assert result.sync_master is None
     assert result.sync_slaves == []
+
+
+def test_parse_player_name_url_encoded_space():
+    """Player names with spaces arrive URL-encoded; they must be decoded correctly."""
+    text = _build_response("player_name:Study%20Room")
+    result = _parse_status(text)
+    assert result.player_name == "Study Room"
+
+
+def test_parse_player_name_sonos_format():
+    """SONOS::Room names arrive with colons encoded so they stay as one token."""
+    text = _build_response("player_name:SONOS%3A%3AStudy")
+    result = _parse_status(text)
+    assert result.player_name == "SONOS::Study"
 
 
 def test_parse_mac_in_player_id_not_confused_with_fields():
