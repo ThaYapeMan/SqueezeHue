@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ColourSwatch } from '@/components/ColourSwatch'
 import { SpectrumBars } from '@/components/SpectrumBars'
 import { SliderField } from '@/components/SliderField'
@@ -98,6 +98,11 @@ type Props = Pick<PreviewState, 'colour' | 'onset' | 'bars' | 'status'>
 export function NowPlaying({ colour, onset, bars, status }: Props) {
   const profileId = status?.active_profile_id ?? null
 
+  // Track which profileId the sliders were last initialized for, so we
+  // initialize exactly once per profile activation even if status arrives
+  // in a later render than the profileId change.
+  const initializedForRef = useRef<string | null>(null)
+
   // Cutoff sliders — reset only when the active profile changes.
   const [lowSlider, setLowSlider] = useState<number>(hzToSlider(50))
   const [highSlider, setHighSlider] = useState<number>(hzToSlider(12000))
@@ -112,14 +117,20 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
   const [bandResult, setBandResult] = useState<string | null>(null)
   const [bandError, setBandError] = useState(false)
 
+  // Initialize sliders once per profile. Depends on both profileId and status
+  // so it fires as soon as status arrives with the profile's stored values,
+  // regardless of whether profileId or status arrived first.
   useEffect(() => {
-    if (status?.lower_cutoff_freq != null) setLowSlider(hzToSlider(status.lower_cutoff_freq))
-    if (status?.higher_cutoff_freq != null) setHighSlider(hzToSlider(status.higher_cutoff_freq))
-    if (status?.bass_hz != null) setBassSlider(hzToSlider(status.bass_hz))
-    if (status?.mid_hz != null) setMidSlider(hzToSlider(status.mid_hz))
+    if (!profileId || profileId === initializedForRef.current) return
+    if (!status) return
+    initializedForRef.current = profileId
+    if (status.lower_cutoff_freq != null) setLowSlider(hzToSlider(status.lower_cutoff_freq))
+    if (status.higher_cutoff_freq != null) setHighSlider(hzToSlider(status.higher_cutoff_freq))
+    if (status.bass_hz != null) setBassSlider(hzToSlider(status.bass_hz))
+    if (status.mid_hz != null) setMidSlider(hzToSlider(status.mid_hz))
     setApplyResult(null)
     setBandResult(null)
-  }, [profileId])
+  }, [profileId, status])
 
   // Applied values (what cava is actually using) — drive the spectrum display.
   const appliedLower  = status?.lower_cutoff_freq  ?? 50
@@ -151,6 +162,25 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
     setMidSlider(v)
   }
 
+  // Input commit handlers: enforce the same constraints as the sliders.
+  function handleLowCommit(hz: number) {
+    setLowSlider(hzToSlider(Math.max(20, Math.min(pendingHigher - 1, hz))))
+  }
+
+  function handleHighCommit(hz: number) {
+    setHighSlider(hzToSlider(Math.max(pendingLower + 1, Math.min(20000, hz))))
+  }
+
+  function handleBassCommit(hz: number) {
+    const constrained = Math.max(appliedLower + 1, Math.min(pendingMid - 1, hz))
+    setBassSlider(hzToSlider(constrained))
+  }
+
+  function handleMidCommit(hz: number) {
+    const constrained = Math.max(pendingBass + 1, Math.min(appliedHigher - 1, hz))
+    setMidSlider(hzToSlider(constrained))
+  }
+
   async function handleApply() {
     if (!profileId) return
     setApplying(true)
@@ -168,8 +198,8 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
   }
 
   function handleReset() {
-    setLowSlider(hzToSlider(status?.lower_cutoff_freq ?? 50))
-    setHighSlider(hzToSlider(status?.higher_cutoff_freq ?? 12000))
+    setLowSlider(hzToSlider(appliedLower))
+    setHighSlider(hzToSlider(appliedHigher))
   }
 
   async function handleApplyBands() {
@@ -189,8 +219,8 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
   }
 
   function handleResetBands() {
-    setBassSlider(hzToSlider(status?.bass_hz ?? 250))
-    setMidSlider(hzToSlider(status?.mid_hz ?? 2000))
+    setBassSlider(hzToSlider(appliedBass))
+    setMidSlider(hzToSlider(appliedMid))
   }
 
   return (
@@ -241,6 +271,10 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
                   format={() => `${pendingBass} Hz`}
                   onChange={handleBassChange}
                   disabled={applyingBands}
+                  inputHz={pendingBass}
+                  inputMin={20}
+                  inputMax={20000}
+                  onInputCommit={handleBassCommit}
                 />
                 <SliderField
                   label="Mid / treble"
@@ -251,6 +285,10 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
                   format={() => `${pendingMid} Hz`}
                   onChange={handleMidChange}
                   disabled={applyingBands}
+                  inputHz={pendingMid}
+                  inputMin={20}
+                  inputMax={20000}
+                  onInputCommit={handleMidCommit}
                 />
                 <div className="flex items-center gap-3">
                   <Button size="sm" onClick={handleApplyBands} disabled={applyingBands || !hasBandChanges}>
@@ -291,6 +329,10 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
               format={() => `${pendingLower} Hz`}
               onChange={setLowSlider}
               disabled={applying}
+              inputHz={pendingLower}
+              inputMin={20}
+              inputMax={20000}
+              onInputCommit={handleLowCommit}
             />
             <SliderField
               label="High cut"
@@ -301,6 +343,10 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
               format={() => `${pendingHigher} Hz`}
               onChange={setHighSlider}
               disabled={applying}
+              inputHz={pendingHigher}
+              inputMin={20}
+              inputMax={20000}
+              onInputCommit={handleHighCommit}
             />
             <div className="flex items-center gap-3">
               <Button size="sm" onClick={handleApply} disabled={applying || !hasChanges}>
