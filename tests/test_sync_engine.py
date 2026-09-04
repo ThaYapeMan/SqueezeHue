@@ -124,13 +124,13 @@ def test_normaliser_silence_gate_returns_dark_frame():
 
 def test_normaliser_spike_above_warmup_produces_bright_output():
     """After EMA has warmed up to a moderate level, a sudden spike → output
-    well above 128 (the midpoint that represents exertion = 1.0)."""
+    well above the steady-state byte (≈ 85 with clip=3.0)."""
     norm = BandNormaliser()
     # Warm the EMA to a moderate level well above the silence gate.
     warm = bytes([100] * 30)
     for _ in range(200):
         norm.normalise(warm)
-    # A spike to near-full-scale should yield exertion > 1.0 → bytes > 128.
+    # A spike to near-full-scale should yield exertion > 1.0 → bytes > 85.
     spike = bytes([220] * 30)
     result = norm.normalise(spike)
     assert all(b > 128 for b in result)
@@ -138,14 +138,15 @@ def test_normaliser_spike_above_warmup_produces_bright_output():
 
 def test_normaliser_steady_state_converges_to_midpoint():
     """After EMA convergence, a frame equal to the running average should
-    produce exertion ≈ 1.0, encoded as byte ≈ 128 (±8 for float rounding)."""
+    produce exertion ≈ 1.0.  With default clip=3.0 that encodes as byte ≈ 85
+    (= int(1.0 * 255/3.0)), not 128 — the higher clip gives more headroom."""
     norm = BandNormaliser()
     steady = bytes([180] * 30)
     for _ in range(300):
         norm.normalise(steady)
     result = norm.normalise(steady)
-    assert all(120 <= b <= 136 for b in result), (
-        f"Expected bytes near 128 after convergence, got: {list(result[:5])}…"
+    assert all(82 <= b <= 88 for b in result), (
+        f"Expected bytes near 85 after convergence (clip=3.0), got: {list(result[:5])}…"
     )
 
 

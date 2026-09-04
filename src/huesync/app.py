@@ -146,6 +146,7 @@ async def save_profile(
     higher_cutoff_freq: int = Form(12000),
     onset_delta: float = Form(0.1),
     onset_alpha: float = Form(0.9),
+    exertion_clip: float = Form(3.0),
 ):
     existing = storage.get_profile(profile_id) if profile_id else None
     profile = existing or Profile()
@@ -165,6 +166,7 @@ async def save_profile(
     profile.higher_cutoff_freq = higher_cutoff_freq
     profile.onset_delta = onset_delta
     profile.onset_alpha = onset_alpha
+    profile.exertion_clip = exertion_clip
     profile.bars = bars
     if not profile.player_mac:
         profile.player_mac = generate_locally_administered_mac()

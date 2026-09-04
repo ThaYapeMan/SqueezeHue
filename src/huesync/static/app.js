@@ -74,6 +74,8 @@ function editProfile(btn) {
   form.elements["lms_port"].value = profile.lms_port ?? 3483;
   form.elements["player_name"].value = profile.player_name || "";
   form.elements["color_mode"].value = profile.color_mode || "";
+  if (form.elements["exertion_clip"])
+    form.elements["exertion_clip"].value = profile.exertion_clip ?? 3.0;
   form.elements["sensitivity"].value = profile.sensitivity ?? 1.0;
   form.elements["brightness_floor"].value = profile.brightness_floor ?? 0.15;
   form.elements["bars"].value = profile.bars ?? 30;

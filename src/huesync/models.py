@@ -139,6 +139,16 @@ class Profile:
     # Higher values = longer suppression after a loud onset.  Range 0–1.
     onset_alpha: float = 0.9
 
+    # Three-layer loudness pipeline:
+    #   1. exertion_clip (HERE): sets "maximally loud" in relative terms.
+    #      Steady-state music at exertion ≈ 1× maps to byte ≈ 255/clip.
+    #      Higher = more headroom before saturation.
+    #   2. sensitivity: multiplier applied after normalisation; fine-tune
+    #      overall brightness without changing the dynamic range.
+    #   3. Clip at 1.0 (in ColourModeEffect): safety ceiling before RGB
+    #      conversion. Not a musical choice — do not touch for tuning.
+    exertion_clip: float = 3.0
+
     enabled: bool = True
 
     def to_dict(self) -> dict:

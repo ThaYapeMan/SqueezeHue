@@ -122,28 +122,25 @@ class BandNormaliser:
     into the existing frame_to_commands() pipeline unchanged:
 
         exertion 0.0  → byte   0  (band well below its average)
-        exertion 1.0  → byte 128  (band exactly at its average)
-        exertion 2.0  → byte 255  (band at twice its average, clipped here)
+        exertion 1.0  → byte  85  (band exactly at its average, clip=3.0)
+        exertion 3.0  → byte 255  (band at three times its average, clipped)
 
-    Clipping note — there are two independent ceilings in the pipeline:
+    Three-layer loudness pipeline — how the settings interact:
 
-    1. HERE at 2× the band's own average.  This is a *musical scale
-       choice*: it sets what "maximally loud relative to normal" means.
-       Raising it makes the output more sensitive to brief spikes;
-       lowering it compresses the dynamic range further.
+    1. HERE (exertion_clip): sets what "maximally loud relative to normal"
+       means in relative terms.  Default 3.0 gives headroom so constant-
+       level music (exertion ≈ 1×) sits around byte 85 (≈ 33 % output)
+       rather than saturating.  Lower values compress dynamic range;
+       higher values give more headroom before saturation.
 
-    2. In ColourModeEffect.render(), after multiplying by profile.sensitivity.
-       That clip (at 1.0, just before the RGB conversion) is a *safety
-       ceiling*, not a musical choice.
+    2. profile.sensitivity (in ColourModeEffect.render()): a multiplier
+       applied *after* normalisation.  With normalised input at ≈ 0.33,
+       sens=1.0 is roughly one-third brightness steady-state; sens=2.0
+       doubles that to two-thirds.  Fine-tune here.
 
-    These two ceilings interact.  With DEFAULT_ALPHA the normalised output
-    hovers around byte 128 (= 0.5 after ÷ 255) during steady music, so
-    sens=1.0 gives roughly half-brightness on average and peaks briefly at
-    full-brightness.  Raising sensitivity above ~2.0 pushes steady-state
-    output into the upper ceiling and the image becomes uniformly saturated.
-    After the normaliser was added, profile.sensitivity is best treated as a
-    fine-tune around 1.0 rather than the primary loudness driver it was before
-    (the normalisation now does that work).
+    3. Clip at 1.0 (in ColourModeEffect.render()): safety ceiling just
+       before RGB conversion.  Prevents individual channels from exceeding
+       full brightness regardless of sensitivity.  Not a musical choice.
     """
 
     #: EMA smoothing factor.  At 30 Hz, α = 0.02 gives a window of ≈ 1.7 s.
@@ -157,16 +154,18 @@ class BandNormaliser:
     #: updates during silence so the baseline decays naturally.
     DEFAULT_GATE: float = 5.0
 
-    #: Maximum exertion ratio before clipping.  See class docstring.
-    _EXERTION_CLIP: float = 2.0
+    #: Default exertion clip ratio.  See class docstring.
+    DEFAULT_EXERTION_CLIP: float = 3.0
 
     def __init__(
         self,
         alpha: float = DEFAULT_ALPHA,
         gate: float = DEFAULT_GATE,
+        exertion_clip: float = DEFAULT_EXERTION_CLIP,
     ) -> None:
         self.alpha = alpha
         self.gate = gate
+        self.exertion_clip = exertion_clip
         # Lazily initialised on the first frame so frame size need not be
         # known at construction time.
         self._ema: list[float] | None = None
@@ -197,7 +196,7 @@ class BandNormaliser:
             # Guard against a zero EMA (e.g. a bar that has been silent for
             # the entire session so far).
             exertion = v / max(ema, 1.0)
-            result[i] = int(min(exertion, self._EXERTION_CLIP) * (255.0 / self._EXERTION_CLIP))
+            result[i] = int(min(exertion, self.exertion_clip) * (255.0 / self.exertion_clip))
         return bytes(result)
 
 
@@ -374,9 +373,10 @@ class CavaAnalyser:
         bars: int,
         onset_delta: float = 0.1,
         onset_alpha: float = 0.9,
+        exertion_clip: float = BandNormaliser.DEFAULT_EXERTION_CLIP,
     ) -> None:
         self._reader = FifoReader(fifo_path, frame_size=bars)
-        self._normaliser = BandNormaliser()
+        self._normaliser = BandNormaliser(exertion_clip=exertion_clip)
         self._onset = OnsetDetector(delta=onset_delta, alpha=onset_alpha)
 
     def start(self) -> None:
@@ -510,6 +510,7 @@ class SyncEngine:
             bars=profile.bars,
             onset_delta=profile.onset_delta,
             onset_alpha=profile.onset_alpha,
+            exertion_clip=profile.exertion_clip,
         )
         self._effect: Effect = ColourModeEffect(profile)
         self._probe: LatencyProbe = probe if probe is not None else NoLatencyProbe()
