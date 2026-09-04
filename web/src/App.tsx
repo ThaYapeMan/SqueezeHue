@@ -64,7 +64,7 @@ export default function App() {
         </nav>
 
         <main className="flex-1 overflow-y-auto">
-          <div className="max-w-xl mx-auto px-6 py-6">
+          <div className={cn('mx-auto px-6 py-6', activeTab === 'now-playing' ? 'max-w-xl' : 'max-w-3xl')}>
             {activeTab === 'now-playing' && (
               <NowPlaying colour={colour} onset={onset} bars={bars} status={status} />
             )}
