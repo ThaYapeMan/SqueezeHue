@@ -15,3 +15,8 @@ config.yaml
 *.fifo
 huesync.db
 cava_0.10.7+dfsg-1_amd64.deb
+
+# Test audio files — binary, too large for the repo
+tests/*.flac
+tests/*.wav
+tests/*.mp3

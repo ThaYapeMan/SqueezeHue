@@ -1,120 +1,196 @@
 # HueSync — project context for Claude Code
 
-## Language convention
+## Conventions
 
-All code comments, docstrings, commit messages, and documentation must be
-written in **English**. Conversational responses to the user may be in Dutch.
+- All code comments, docstrings, commit messages and documentation are written
+  in **English**. Conversational replies to the user may be in Dutch.
+- No AI attribution in commit messages (`includeCoAuthoredBy: false`).
+- Always run `ruff check .` and the tests yourself before reporting work as
+  finished.
+
+## Documentation layout
+
+| Path | Meaning |
+|---|---|
+| `docs/` | Current, actionable specs. Work from these. |
+| `docs/future/` | Parked ideas. **Do not read or implement unless explicitly asked** — they cost context and are not current. |
+| `docs/archive/` | Superseded specs, kept only so the reasoning behind past decisions is recoverable. |
+
+`docs/EFFECT_ENGINE.md` is the consolidated, leading spec for the effect engine
+work.
+
+---
 
 ## What this project does
 
-HueSync makes Philips Hue Entertainment lights react to music playing in
-Lyrion Music Server (LMS). The signal chain is:
+HueSync makes Philips Hue Entertainment lights react to music playing through
+Lyrion Music Server (LMS).
 
 ```
-LMS  →  squeezelite (virtual player)  →  ALSA shared memory
-     →  cava (spectrum analyser)      →  FIFO (named pipe)
-     →  SyncEngine (Python)           →  Hue Entertainment API (UDP/DTLS)
+LMS  →  squeezelite -v (virtual player)  →  POSIX shared memory (raw PCM)
+     →  cava (spectrum analysis)         →  FIFO (named pipe)
+     →  Analyser → Effect → Scene        →  Output driver
+     →  Hue Entertainment API (DTLS/UDP) →  bridge → Entertainment Area
 ```
 
-- **squeezelite** registers as a virtual player in LMS and decodes the audio
-  stream into PCM. It writes the PCM into a POSIX shared-memory segment at
-  `/dev/shm/squeezelite-<mac>`.
-- **cava** reads that shared-memory segment (`method = shmem`), computes a
-  bar spectrum (configurable number of bars, 8-bit, mono), and writes raw
-  frames to a named FIFO.
-- **SyncEngine** (`sync_engine.py`) reads the FIFO in a background thread
-  (`FifoReader`), normalises the spectrum via `BandNormaliser`, maps it to
-  RGB via the active `ColorMode`, and sends `LightColorCommand`s to the Hue
-  bridge over a DTLS-secured UDP stream at a fixed 30 Hz rate.
+- **squeezelite** registers as a virtual player in LMS, decodes the stream to
+  PCM, and (with `-v`) exposes it at `/dev/shm/squeezelite-<mac>`.
+- **cava** reads that segment (`method = shmem`), computes a bar spectrum, and
+  writes raw 8-bit frames to a FIFO.
+- **HueSync** reads the FIFO, normalises, maps to colour, and streams to the
+  bridge at a fixed 30 Hz.
+
+---
+
+## Architecture — the layer boundaries matter
+
+The code was deliberately restructured so that effects know nothing about Hue,
+and the analysis backend can be swapped. **Do not collapse these layers.**
+
+All protocol types live in `types.py`:
+
+| Type | Responsibility |
+|---|---|
+| `Colour` | RGB floats 0.0–1.0. Converted to protocol format *in the driver only*. |
+| `Position` | A point in normalised room space (−1..1 per axis). |
+| `Scene` | Colour as a function of position: `color_at(position, t)`. |
+| `Effect` | Holds state, renders a `Scene` per frame from `AudioFeatures`. |
+| `Analyser` | Produces `AudioFeatures`. Swappable backend. |
+| `Output` | Samples a `Scene` at its own lights' positions and speaks its protocol. |
+
+**Hard rule: `LightColorCommand` must not appear anywhere outside
+`hue_output.py`.** Same principle applies to any future driver — WLED and
+Nanoleaf specifics stay inside their own modules.
+
+Effects return a `Scene` rather than a pixel array precisely because outputs
+have different geometry: Hue lights sit at 3D positions, a WLED strip is
+linear, Nanoleaf panels are 2D. Each driver samples the same Scene at its own
+coordinates.
+
+---
 
 ## Non-obvious design decisions — do not "clean up"
 
+Each of these fixed a real, hard-to-diagnose bug. Removing them reintroduces it.
+
 ### snd-dummy instead of ALSA null (`player_manager.py`)
 
-squeezelite's ALSA output is pointed at `hw:CARD=Dummy,DEV=0` (the
-`snd-dummy` kernel module), **not** the `null` ALSA plugin. The null plugin
-has no hardware clock: squeezelite decodes as fast as the CPU allows, pinning
-a core at ~100 % and hammering LMS with stream requests (LMS is
-single-threaded Perl). snd-dummy is a real timer-driven card; squeezelite
-paces at actual playback speed (~0.2 % CPU). Requires `snd-dummy` on the
-host kernel and the resulting `/dev/snd` nodes passed into the container.
+squeezelite's output goes to `hw:CARD=Dummy,DEV=0` (the `snd-dummy` kernel
+module), **not** ALSA's `null` plugin. `null` has no clock, so squeezelite
+decodes as fast as the CPU allows: ~100 % of a core, *and* LMS (single-threaded
+Perl) stutters for every other player because it is being hammered with stream
+requests. snd-dummy is a real timer-driven card — squeezelite paces at playback
+speed, ~0.2 % CPU.
 
-### FIFO reader starts before cava (`player_manager.py` — `activate()`)
+Requires `snd-dummy` loaded on the **Proxmox host** and the `/dev/snd` nodes
+passed into the container. This is a host-level dependency: a host rebuild
+without it silently breaks HueSync.
 
-A FIFO with a writer but no reader delivers SIGPIPE to the writer. If cava
-starts before `SyncEngine.start()` opens the read end, cava dies immediately
-and silently. The activation order is therefore:
+### FIFO reader starts before cava (`player_manager.activate()`)
 
-1. `_create_fifo()` — creates the FIFO on disk
-2. `engine.start()` — opens the read end (blocks until a writer appears)
-3. `_start_cava()` — spawns cava as the writer
+A FIFO writer with no reader dies with SIGPIPE. Activation order is therefore:
 
-### Wait for squeezelite's SHM segment (`player_manager.py`)
+1. `_create_fifo()` — create the FIFO
+2. `engine.start()` — open the read end
+3. `_start_cava()` — spawn the writer
 
-squeezelite creates `/dev/shm/squeezelite-<mac>` a moment after it starts.
-`_wait_for_shm()` polls (0.1 s interval, 10 s timeout) before writing cava's
-config and spawning cava. Without this wait, cava exits immediately on a new
-profile with "Could not open source".
+Starting cava earlier meant it died during the 8-second Hue DTLS handshake,
+silently, every time.
 
-### 30 Hz sender cap (`sync_engine.py`)
+### Wait for squeezelite's SHM segment (`_wait_for_shm()`)
 
-The Hue Entertainment API accepts up to ~50 updates/s, but cava can produce
-frames much faster than real-time (especially against a virtual ALSA device
-with no hardware clock). Queueing every frame overwhelms the asyncio event
-loop and starves the sender coroutine, which then triggers the bridge's
-10-second idle timeout (the bridge closes the stream if it receives no frames
-for 10 s). `FifoReader` keeps only the *latest* frame in a lock-protected
-slot; the sender polls it at a fixed `SEND_INTERVAL_S = 1/30`.
+squeezelite creates `/dev/shm/squeezelite-<mac>` a moment *after* starting.
+cava opens that path once and exits with "Could not open source" if it is not
+there. Every new profile has a fresh MAC, so it never was — existing profiles
+only appeared to work because an earlier run had left a segment behind.
+
+Polls at 0.1 s, 10 s timeout, before cava is spawned.
+
+### 30 Hz sender cap (`sync_engine.py`, `SEND_INTERVAL_S`)
+
+Hue accepts ~50 updates/s; cava produces frames far faster. Queueing every
+frame floods the event loop and starves the sender, and with zero sends for
+10 s the bridge's own idle timeout closes the stream — which looks like a
+crash.
+
+`FifoReader` therefore keeps only the **latest** frame in a lock-protected
+slot; the sender polls it at a fixed rate. Old frames are superseded, never
+queued.
 
 ### cava stderr kept, not discarded (`player_manager.py`)
 
-cava's stderr is redirected to a log file (`<profile-id>.cava.log`) rather
-than `/dev/null`. Discarding it made silent failures (cava exiting as
-`<defunct>` with no error message) very hard to debug.
+cava's stderr goes to `<profile-id>.cava.log`, not `/dev/null`. Discarding it
+made a silent `<defunct>` cava process very hard to diagnose. Teardown
+deliberately leaves the log in place.
 
-### BandNormaliser — two clipping ceilings (`sync_engine.py`)
+### Two clipping ceilings, and how they interact (`sync_engine.py`)
 
-The audio→colour pipeline has two independent upper limits that interact:
+1. **`BandNormaliser._EXERTION_CLIP` (2.0×)** — a *musical scale choice*.
+   Exertion is clipped at 2× the band's rolling average and encoded as
+   0–255 (128 = at average, 255 = 2× average).
+2. **The clip at 1.0 before RGB conversion** — a *safety ceiling*, applied
+   after multiplying by `profile.sensitivity`.
 
-1. **`BandNormaliser._EXERTION_CLIP` (default 2.0×)** — a *musical scale
-   choice*. Exertion is clipped at 2× the band's rolling average, then
-   encoded as bytes 0–255 (128 = at average, 255 = 2× average). Raising
-   this makes the output more sensitive to brief spikes.
-2. **`frame_to_commands()` clip at 1.0** — a *safety ceiling* before the
-   16-bit RGB conversion, after multiplying by `profile.sensitivity`.
+Post-normalisation, `sensitivity = 1.0` is the correct default: steady-state
+music sits around half brightness with brief peaks at full. Above ~2.0 the
+steady state saturates and everything washes out.
 
-With normalised input, `sensitivity = 1.0` keeps steady-state music at
-roughly half-brightness with brief peaks at full. Raising sensitivity above
-~2.0 pushes the steady state into saturation. The default of 1.0 is correct
-starting point post-normalisation.
+### Timing: lights run AHEAD of Sonos
+
+`sonos-squeezebox` throttles its encoder to ~2 seconds of lookahead and Sonos
+buffers further on top. HueSync's virtual player has no such delay, so the
+lights lead the audio in Sonos rooms.
+
+The latency setting therefore has to **delay** frames, not render ahead — the
+opposite of what Music Assistant's plugin does. Implemented as a ring buffer in
+the output layer.
+
+---
 
 ## Deployment
 
-The runtime environment is a **dedicated LXC container** on a Proxmox host.
-There is no local Python runtime on the development machine. Deployment is:
+Runtime is a dedicated **LXC container** (Debian 13) on a Proxmox host. There
+is no Python runtime, venv, pytest or pip on the development machine, and
+**Claude Code has no SSH access to the container** — deployment is manual:
 
+```bash
+# on the LXC, as root
+cd /opt/huesync
+git pull && .venv/bin/pip install . && systemctl restart huesync
 ```
-# on the LXC
-cd /opt/huesync && git pull && systemctl restart huesync
-```
 
-The service runs as user `huesync` under systemd (`systemd/huesync.service`).
-Config lives at `/etc/huesync/config.json` (`HUESYNC_CONFIG` env var).
+Runs as user `huesync` under systemd (`systemd/huesync.service`). Config at
+`/etc/huesync/config.json` (override with `HUESYNC_CONFIG`).
 
-**Do not assume `python`, `pytest`, `uv`, or `pip` are available locally.**
-Tests can be verified by stubbing `hue_entertainment` and running with
-`python3 -c "..."` if no venv is present (see test runs in session history).
+Note: `git config --global --add safe.directory /opt/huesync` was needed once,
+because the directory is owned by `huesync` while git runs as root.
+
+---
 
 ## Key files
 
 | File | Role |
-|------|------|
-| `src/huesync/sync_engine.py` | Audio→colour pipeline: `FifoReader`, `BandNormaliser`, `frame_to_commands`, `SyncEngine` |
-| `src/huesync/player_manager.py` | Process lifecycle: squeezelite + cava + Hue session |
+|---|---|
+| `src/huesync/types.py` | Protocol types: `Colour`, `Position`, `Scene`, `Effect`, `Analyser`, `Output`, `AudioFeatures` |
+| `src/huesync/sync_engine.py` | `FifoReader`, `BandNormaliser`, `CavaAnalyser`, `ColourModeEffect`, `SyncEngine` |
+| `src/huesync/hue_output.py` | **Only** file importing `hue_entertainment` for streaming: `HueDriver`, `ChannelInfo`, `get_channel_infos()` |
+| `src/huesync/hue_bridge.py` | Bridge pairing and Entertainment Area discovery |
+| `src/huesync/player_manager.py` | Process lifecycle: squeezelite + cava + output driver |
 | `src/huesync/models.py` | `Profile`, `BridgeConfig`, `ColorMode` |
+| `src/huesync/lms_discovery.py` | UDP broadcast discovery of the LMS server |
 | `src/huesync/app.py` | FastAPI web UI |
-| `src/huesync/hue_bridge.py` | Hue bridge pairing and area discovery |
 | `src/huesync/storage.py` | JSON config persistence |
-| `tests/test_sync_engine.py` | Unit tests for the audio pipeline |
-| `tests/test_storage.py` | Unit tests for config persistence |
-| `docs/` | Design briefs (not deployed) |
+| `tests/` | Unit tests — keep green |
+
+---
+
+## Known constraints
+
+- **One Entertainment Area can stream per bridge at a time.** A hard Hue Bridge
+  limitation, including on the Bridge Pro. Enforce it in the Hue driver, not in
+  shared code — other outputs have no such limit.
+- **LMS discovery is UDP broadcast** and does not cross subnets. LXC 112 sits
+  on `vmbr1` rather than `vmbr0`; harmless on a flat network, relevant once
+  VLANs exist.
+- **Profile edits must preserve `player_mac`.** A new MAC means a new player in
+  LMS and a new shared-memory segment, so the user has to re-sync.
