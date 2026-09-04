@@ -326,3 +326,32 @@ def test_band_avg_empty_slice():
     bars = [1.0] * 10
     assert _band_avg(bars, 5, 5) == 0.0
     assert _band_avg(bars, 0, 0) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Profile cutoff defaults — single source of truth
+# ---------------------------------------------------------------------------
+
+
+def test_profile_cutoff_defaults():
+    """Profile defaults for cutoff frequencies must match the frontend Reset targets.
+
+    The Reset button in NowPlaying uses status.lower_cutoff_freq / higher_cutoff_freq,
+    which come from the active profile. If the profile was created with all defaults,
+    these are the values Reset will land on. Verify them here so a drift between
+    backend default and frontend expectation is caught immediately.
+    """
+    p = Profile()
+    assert p.lower_cutoff_freq == 50
+    assert p.higher_cutoff_freq == 12000
+
+
+def test_profile_band_boundary_defaults_within_cutoff_range():
+    """bass_hz and mid_hz defaults must lie strictly inside the cutoff range.
+
+    A boundary outside [lower_cutoff_freq, higher_cutoff_freq] produces an
+    empty band, which is confusing and usually wrong.
+    """
+    p = Profile()
+    assert p.lower_cutoff_freq < p.bass_hz < p.higher_cutoff_freq
+    assert p.bass_hz < p.mid_hz < p.higher_cutoff_freq

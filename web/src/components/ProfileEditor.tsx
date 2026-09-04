@@ -77,7 +77,7 @@ function defaultForm(profile?: Profile): FormState {
     onset_delta: profile?.onset_delta ?? 0.07,
     onset_alpha: profile?.onset_alpha ?? 0.9,
     lower_cutoff_freq: String(profile?.lower_cutoff_freq ?? 50),
-    higher_cutoff_freq: String(profile?.higher_cutoff_freq ?? 10000),
+    higher_cutoff_freq: String(profile?.higher_cutoff_freq ?? 12000),
     bass_hz: String(profile?.bass_hz ?? 250),
     mid_hz: String(profile?.mid_hz ?? 2000),
   }

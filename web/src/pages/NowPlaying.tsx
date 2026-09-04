@@ -146,8 +146,8 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
   const hasChanges = pendingLower !== appliedLower || pendingHigher !== appliedHigher
 
   function handleReset() {
-    setLowSlider(hzToSlider(50))
-    setHighSlider(hzToSlider(12000))
+    setLowSlider(hzToSlider(status?.lower_cutoff_freq ?? 50))
+    setHighSlider(hzToSlider(status?.higher_cutoff_freq ?? 12000))
   }
 
   return (
