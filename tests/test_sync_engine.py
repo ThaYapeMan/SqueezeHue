@@ -1,5 +1,5 @@
 from huesync.models import ColorMode, Profile
-from huesync.sync_engine import _band_average, BandNormaliser, ColourModeEffect, OnsetDetector
+from huesync.sync_engine import BandNormaliser, ColourModeEffect, OnsetDetector, _band_average
 from huesync.types import AudioFeatures, Position
 
 # ---------------------------------------------------------------------------
