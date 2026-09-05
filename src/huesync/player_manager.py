@@ -284,25 +284,22 @@ class PlayerManager:
             )
 
     def cleanup_orphaned_shm(self) -> None:
-        """Remove squeezelite shm segments left by a previous crashed run.
+        """Remove all squeezelite shm segments left by a previous crashed run.
 
-        Safe to call at startup: all HueSync-managed squeezelite processes
-        are dead when the service restarts, so any matching segment is stale.
-        Only segments whose MAC matches a known profile are touched; independent
-        squeezelite instances on the same host are left alone.
+        Safe to call at startup: squeezelite is only ever started by HueSync,
+        and only after the service itself is running.  Any segment present
+        when the service starts is therefore stale — including segments from
+        pre-fix runs whose random MAC was never persisted to a profile.
         """
         shm_dir = Path("/dev/shm")
         if not shm_dir.is_dir():
             return
-        known_macs = {p.player_mac for p in self.storage.list_profiles() if p.player_mac}
         for seg in shm_dir.glob("squeezelite-*"):
-            mac = seg.name.removeprefix("squeezelite-")
-            if mac in known_macs:
-                try:
-                    seg.unlink()
-                    log.info("Removed orphaned squeezelite shm segment %s", seg.name)
-                except OSError as exc:
-                    log.warning("Could not remove %s: %s", seg.name, exc)
+            try:
+                seg.unlink()
+                log.info("Removed orphaned squeezelite shm segment %s", seg.name)
+            except OSError as exc:
+                log.warning("Could not remove %s: %s", seg.name, exc)
 
     async def restart_cava(self) -> None:
         """Restart cava within the active session without touching squeezelite or Hue.

@@ -70,7 +70,7 @@ def test_teardown_skips_shm_when_mac_is_empty(tmp_path: Path) -> None:
 
 
 def test_cleanup_orphaned_shm_removes_known_mac(tmp_path: Path) -> None:
-    """cleanup_orphaned_shm() removes segments whose MAC matches a profile."""
+    """cleanup_orphaned_shm() removes segments whose MAC matches a stored profile."""
     mac = "02:ff:00:de:ad:03"
     shm_path = Path(f"/dev/shm/squeezelite-{mac}")
     shm_path.write_bytes(b"")
@@ -81,25 +81,36 @@ def test_cleanup_orphaned_shm_removes_known_mac(tmp_path: Path) -> None:
 
     manager.cleanup_orphaned_shm()
 
-    assert not shm_path.exists(), (
-        "cleanup_orphaned_shm() should have removed the segment"
-    )
+    assert not shm_path.exists()
 
 
-def test_cleanup_orphaned_shm_ignores_unknown_mac(tmp_path: Path) -> None:
-    """cleanup_orphaned_shm() must not touch segments it does not own."""
+def test_cleanup_orphaned_shm_removes_unknown_mac(tmp_path: Path) -> None:
+    """cleanup_orphaned_shm() removes ALL squeezelite-* segments, even those
+    whose MAC is not in any profile (pre-fix runs with random MACs)."""
     unknown_mac = "02:ff:00:de:ad:04"
     shm_path = Path(f"/dev/shm/squeezelite-{unknown_mac}")
     shm_path.write_bytes(b"")
 
-    # Storage has no profile with this MAC.
+    # Storage has NO profile with this MAC — simulates pre-fix orphan.
     manager = _make_manager(tmp_path)
     manager.cleanup_orphaned_shm()
 
-    # File must still be there; clean it up ourselves.
-    try:
-        assert shm_path.exists(), (
-            "cleanup_orphaned_shm() must not remove segments with unknown MACs"
-        )
-    finally:
-        shm_path.unlink(missing_ok=True)
+    assert not shm_path.exists(), (
+        "cleanup_orphaned_shm() should remove ALL squeezelite-* segments at startup, "
+        "not just those matching a known profile MAC"
+    )
+
+
+def test_cleanup_orphaned_shm_removes_multiple(tmp_path: Path) -> None:
+    """cleanup_orphaned_shm() removes every squeezelite-* file it finds."""
+    macs = ["02:ff:00:de:ad:05", "02:ff:00:de:ad:06", "02:ff:00:de:ad:07"]
+    paths = [Path(f"/dev/shm/squeezelite-{m}") for m in macs]
+    for p in paths:
+        p.write_bytes(b"")
+
+    manager = _make_manager(tmp_path)
+    manager.cleanup_orphaned_shm()
+
+    assert not any(p.exists() for p in paths), (
+        "cleanup_orphaned_shm() should have removed all three segments"
+    )
