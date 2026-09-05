@@ -12,6 +12,13 @@ import { restartCava } from '@/lib/api'
 const LOG_MIN = Math.log10(20)
 const LOG_MAX = Math.log10(20000)
 
+// Factory defaults — must match models.py Profile field defaults and
+// ProfileEditor.defaultForm() so there is one canonical source of truth.
+const DEFAULT_LOW  = 50
+const DEFAULT_HIGH = 12000
+const DEFAULT_BASS = 250
+const DEFAULT_MID  = 2000
+
 function hzToSlider(hz: number): number {
   return (Math.log10(Math.max(hz, 20)) - LOG_MIN) / (LOG_MAX - LOG_MIN) * 100
 }
@@ -144,8 +151,10 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
   const pendingBass   = sliderToHz(bassSlider)
   const pendingMid    = sliderToHz(midSlider)
 
-  const hasChanges     = pendingLower !== appliedLower || pendingHigher !== appliedHigher
-  const hasBandChanges = pendingBass  !== appliedBass  || pendingMid    !== appliedMid
+  const hasChanges            = pendingLower !== appliedLower || pendingHigher !== appliedHigher
+  const hasBandChanges        = pendingBass  !== appliedBass  || pendingMid    !== appliedMid
+  const hasDefaultChanges     = pendingLower !== DEFAULT_LOW  || pendingHigher !== DEFAULT_HIGH
+  const hasDefaultBandChanges = pendingBass  !== DEFAULT_BASS || pendingMid    !== DEFAULT_MID
 
   // Constraint: bass_hz < mid_hz; both within the applied cutoff range.
   function handleBassChange(v: number) {
@@ -202,6 +211,11 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
     setHighSlider(hzToSlider(appliedHigher))
   }
 
+  function handleRestoreDefaults() {
+    setLowSlider(hzToSlider(DEFAULT_LOW))
+    setHighSlider(hzToSlider(DEFAULT_HIGH))
+  }
+
   async function handleApplyBands() {
     if (!profileId) return
     setApplyingBands(true)
@@ -221,6 +235,11 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
   function handleResetBands() {
     setBassSlider(hzToSlider(appliedBass))
     setMidSlider(hzToSlider(appliedMid))
+  }
+
+  function handleRestoreDefaultsBands() {
+    setBassSlider(hzToSlider(DEFAULT_BASS))
+    setMidSlider(hzToSlider(DEFAULT_MID))
   }
 
   return (
@@ -275,6 +294,7 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
                   inputMin={20}
                   inputMax={20000}
                   onInputCommit={handleBassCommit}
+                  inputTestId="bass-hz"
                 />
                 <SliderField
                   label="Mid / treble"
@@ -289,13 +309,29 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
                   inputMin={20}
                   inputMax={20000}
                   onInputCommit={handleMidCommit}
+                  inputTestId="mid-hz"
                 />
                 <div className="flex items-center gap-3">
-                  <Button size="sm" onClick={handleApplyBands} disabled={applyingBands || !hasBandChanges}>
+                  <Button size="sm" onClick={handleApplyBands} disabled={applyingBands || !hasBandChanges} data-testid="apply-bands">
                     {applyingBands ? 'Applying…' : 'Apply'}
                   </Button>
-                  <Button size="sm" variant="outline" onClick={handleResetBands} disabled={applyingBands}>
-                    Reset
+                  <Button
+                    size="sm" variant="outline"
+                    onClick={handleResetBands}
+                    disabled={applyingBands || !hasBandChanges}
+                    title="Reset to saved profile value"
+                    data-testid="reset-bands"
+                  >
+                    Reset to saved
+                  </Button>
+                  <Button
+                    size="sm" variant="ghost"
+                    onClick={handleRestoreDefaultsBands}
+                    disabled={applyingBands || !hasDefaultBandChanges}
+                    title="Restore factory defaults"
+                    data-testid="restore-defaults-bands"
+                  >
+                    Restore defaults
                   </Button>
                   {bandResult && (
                     <span className={bandError ? 'text-destructive text-sm' : 'text-sm text-muted-foreground'}>
@@ -333,6 +369,7 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
               inputMin={20}
               inputMax={20000}
               onInputCommit={handleLowCommit}
+              inputTestId="low-cut-hz"
             />
             <SliderField
               label="High cut"
@@ -347,13 +384,29 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
               inputMin={20}
               inputMax={20000}
               onInputCommit={handleHighCommit}
+              inputTestId="high-cut-hz"
             />
             <div className="flex items-center gap-3">
-              <Button size="sm" onClick={handleApply} disabled={applying || !hasChanges}>
+              <Button size="sm" onClick={handleApply} disabled={applying || !hasChanges} data-testid="apply-cutoffs">
                 {applying ? 'Applying…' : 'Apply'}
               </Button>
-              <Button size="sm" variant="outline" onClick={handleReset} disabled={applying}>
-                Reset
+              <Button
+                size="sm" variant="outline"
+                onClick={handleReset}
+                disabled={applying || !hasChanges}
+                title="Reset to saved profile value"
+                data-testid="reset-cutoffs"
+              >
+                Reset to saved
+              </Button>
+              <Button
+                size="sm" variant="ghost"
+                onClick={handleRestoreDefaults}
+                disabled={applying || !hasDefaultChanges}
+                title="Restore factory defaults"
+                data-testid="restore-defaults-cutoffs"
+              >
+                Restore defaults
               </Button>
               {applyResult && (
                 <span className={applyError ? 'text-destructive text-sm' : 'text-sm text-muted-foreground'}>

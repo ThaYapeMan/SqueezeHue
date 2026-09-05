@@ -18,11 +18,12 @@ interface Props {
   inputMin?: number
   inputMax?: number
   onInputCommit?: (hz: number) => void
+  inputTestId?: string
 }
 
 export function SliderField({
   label, value, min, max, step = 1, format, onChange, disabled,
-  inputHz, inputMin = 20, inputMax = 20000, onInputCommit,
+  inputHz, inputMin = 20, inputMax = 20000, onInputCommit, inputTestId,
 }: Props) {
   const hasInput = onInputCommit !== undefined
 
@@ -85,6 +86,7 @@ export function SliderField({
             onBlur={commitInput}
             onKeyDown={(e) => { if (e.key === 'Enter') commitInput() }}
             disabled={disabled}
+            data-testid={inputTestId}
           />
         )}
       </div>
