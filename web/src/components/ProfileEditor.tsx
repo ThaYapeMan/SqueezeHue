@@ -54,6 +54,8 @@ interface FormState {
   onset_delta: number
   onset_alpha: number
   onset_method: string
+  superflux_mu: number
+  superflux_lag: number
   lower_cutoff_freq: string
   higher_cutoff_freq: string
   bass_hz: string
@@ -78,6 +80,8 @@ function defaultForm(profile?: Profile): FormState {
     onset_delta: profile?.onset_delta ?? 0.07,
     onset_alpha: profile?.onset_alpha ?? 0.9,
     onset_method: profile?.onset_method ?? 'combined',
+    superflux_mu: profile?.superflux_mu ?? 3,
+    superflux_lag: profile?.superflux_lag ?? 2,
     lower_cutoff_freq: String(profile?.lower_cutoff_freq ?? 50),
     higher_cutoff_freq: String(profile?.higher_cutoff_freq ?? 12000),
     bass_hz: String(profile?.bass_hz ?? 250),
@@ -182,6 +186,8 @@ export function ProfileEditor({ profile, bridges, onSave, onClose, open }: Props
         onset_delta: form.onset_delta,
         onset_alpha: form.onset_alpha,
         onset_method: form.onset_method,
+        superflux_mu: form.superflux_mu,
+        superflux_lag: form.superflux_lag,
         lower_cutoff_freq: parseInt(form.lower_cutoff_freq, 10),
         higher_cutoff_freq: parseInt(form.higher_cutoff_freq, 10),
         bass_hz: parseInt(form.bass_hz, 10),
@@ -410,6 +416,35 @@ export function ProfileEditor({ profile, bridges, onSave, onClose, open }: Props
               format={(v) => v.toFixed(2)}
               onChange={(v) => set('onset_alpha', v)}
             />
+            {form.onset_method === 'superflux' && (
+              <>
+                <SliderField
+                  label="SuperFlux mu (bins)"
+                  value={form.superflux_mu}
+                  min={1}
+                  max={10}
+                  step={1}
+                  format={(v) => String(v)}
+                  onChange={(v) => set('superflux_mu', v)}
+                />
+                <p className="text-xs text-muted-foreground -mt-1">
+                  Max-filter half-width in FFT bins (±{form.superflux_mu} bins = ±{Math.round(form.superflux_mu * 44100 / 2048)} Hz).
+                  Increase if vibrato still triggers false onsets.
+                </p>
+                <SliderField
+                  label="SuperFlux lag (frames)"
+                  value={form.superflux_lag}
+                  min={1}
+                  max={5}
+                  step={1}
+                  format={(v) => String(v)}
+                  onChange={(v) => set('superflux_lag', v)}
+                />
+                <p className="text-xs text-muted-foreground -mt-1">
+                  Compare frame n with frame n−{form.superflux_lag} ({Math.round(form.superflux_lag * 10)} ms look-back).
+                </p>
+              </>
+            )}
           </div>
 
           <SectionLabel>Frequency cutoffs</SectionLabel>

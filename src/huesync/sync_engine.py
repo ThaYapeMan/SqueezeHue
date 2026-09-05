@@ -274,6 +274,20 @@ class OnsetDetector:
         flux = sum(max(0.0, b - p) for b, p in zip(bars, self._prev_bars, strict=True))
         self._prev_bars = list(bars)
 
+        return self._peak_pick(flux)
+
+    def process_odf(self, odf: float) -> tuple[bool, float]:
+        """Apply Dixon peak-picking to a pre-computed ODF value.
+
+        Identical to process() but skips spectral flux computation — use when
+        the caller has already computed the ODF (e.g. SuperfluxDetector, which
+        applies max-filtering before summing).  Strength returned is the raw
+        ODF value.
+        """
+        return self._peak_pick(odf)
+
+    def _peak_pick(self, flux: float) -> tuple[bool, float]:
+        """Normalise *flux* and apply the three Dixon peak-picking conditions."""
         # Running mean and variance for normalisation.  Use pre-update mean so
         # the residual is unbiased.
         old_ema = self._flux_ema
@@ -352,6 +366,112 @@ class StftOnsetPipeline:
     def push(self, samples: np.ndarray) -> list[tuple[bool, float]]:
         """Process PCM samples; return *(onset, strength)* per STFT frame."""
         return [self._onset.process(frame.tolist()) for frame in self._stft.push(samples)]
+
+
+# ---------------------------------------------------------------------------
+# SuperfluxDetector — Böck & Widmer (2013) SuperFlux on STFT magnitude frames
+# ---------------------------------------------------------------------------
+
+
+class SuperfluxDetector:
+    """SuperFlux onset detection (Böck & Widmer, 2013) with Dixon peak-picking.
+
+    Spectral flux is computed with a maximum-filter applied over mu neighboring
+    bins of the previous frame before taking the half-wave rectified difference.
+    This suppresses vibrato and pitch-shifting artefacts that trigger plain
+    spectral flux with false positives.
+
+    Algorithm (from the paper):
+        X_max(n, k) = max( X(n, k-mu) … X(n, k+mu) )
+        SuperFlux(n) = Σ_k  H( X(n, k) − X_max(n-lag, k) )
+        H = half-wave rectifier: H(x) = max(0, x)
+
+    Böck uses mu=3 bins on a mel filterbank (~84 bands) and lag=2 frames.
+    On raw FFT bins (PcmStft: 1025 bins at 21.5 Hz/bin for 44100 Hz), mu=3
+    covers only ±65 Hz — less relative effect than on mel because the bin
+    resolution is much finer.  Make mu configurable so users can increase it
+    if more vibrato suppression is needed.
+
+    Dixon peak-picking is applied to the SuperFlux ODF via OnsetDetector.process_odf()
+    so the three conditions (local max, asymmetric mean + delta, g_alpha) are
+    identical to the combined and multiband methods.
+
+    Source: Böck & Widmer, "Maximum Filter Vibrato Suppression for Onset
+    Detection", DAFx-13.  The algorithm itself is patent-free; this is an
+    independent implementation from the paper.
+    """
+
+    def __init__(
+        self,
+        mu: int = 3,
+        lag: int = 2,
+        delta: float = 0.1,
+        alpha: float = 0.9,
+    ) -> None:
+        self._mu = mu
+        self._lag = lag
+        self._picker = OnsetDetector(delta=delta, alpha=alpha)
+        # Ring buffer of the most recent lag+1 magnitude frames.  The oldest
+        # frame in this buffer is exactly lag frames behind the current one.
+        self._frame_history: deque[np.ndarray] = deque(maxlen=lag + 1)
+
+    def process(self, frame: np.ndarray) -> tuple[bool, float]:
+        """Compute SuperFlux ODF for *frame* and apply Dixon peak-picking."""
+        self._frame_history.append(frame)
+
+        if len(self._frame_history) <= self._lag:
+            # Not enough history for the lag yet; feed zero to the picker.
+            return self._picker.process_odf(0.0)
+
+        # Frame from exactly lag steps ago.
+        prev_frame = self._frame_history[0]  # oldest in the fixed-size deque
+
+        # Maximum-filter the lagged frame over mu neighboring bins.
+        n_bins = len(prev_frame)
+        mu = self._mu
+        x_max = np.empty(n_bins, dtype=np.float32)
+        for k in range(n_bins):
+            lo = max(0, k - mu)
+            hi = min(n_bins, k + mu + 1)
+            x_max[k] = prev_frame[lo:hi].max()
+
+        # Half-wave rectified spectral difference → SuperFlux scalar.
+        superflux = float(np.sum(np.maximum(0.0, frame - x_max)))
+
+        return self._picker.process_odf(superflux)
+
+
+class SuperfluxStftPipeline:
+    """SuperFlux onset detector on 100 Hz STFT data.
+
+    Wraps PcmStft + SuperfluxDetector.  push() returns a list of
+    (onset, superflux_strength) pairs — one per STFT frame.
+
+    Usage::
+
+        pipeline = SuperfluxStftPipeline(sample_rate=44100)
+        results = pipeline.push(mono_float32_samples)
+        # results: list of (onset: bool, strength: float) per STFT frame
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        mu: int = 3,
+        lag: int = 2,
+        delta: float = 0.1,
+        alpha: float = 0.9,
+    ) -> None:
+        self._stft = PcmStft(sample_rate)
+        self._detector = SuperfluxDetector(mu=mu, lag=lag, delta=delta, alpha=alpha)
+
+    @property
+    def hop(self) -> int:
+        return self._stft.hop
+
+    def push(self, samples: np.ndarray) -> list[tuple[bool, float]]:
+        """Process PCM samples; return *(onset, strength)* per STFT frame."""
+        return [self._detector.process(frame) for frame in self._stft.push(samples)]
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +781,7 @@ class SyncEngine:
         self._shm_source: SqueezeliteShmSource | None = None
         self._pcm_onset: StftOnsetPipeline | None = None
         self._pcm_multiband: MultibandStftPipeline | None = None
+        self._pcm_superflux: SuperfluxStftPipeline | None = None
         self._last_pcm_onset: bool = False
         self._last_onset_bass: bool = False
         self._last_onset_mid: bool = False
@@ -672,7 +793,7 @@ class SyncEngine:
         Selects the appropriate pipeline based on profile.onset_method:
         - "combined"  → StftOnsetPipeline (comparison only, no colour effect)
         - "multiband" → MultibandStftPipeline (drives onset_bass/mid/treble)
-        - "superflux" → StftOnsetPipeline for now (superflux commit adds its own)
+        - "superflux" → SuperfluxStftPipeline (max-filter vibrato suppression)
 
         Call after the squeezelite SHM segment is confirmed ready and before
         run() is started.
@@ -684,6 +805,14 @@ class SyncEngine:
                 source.sample_rate,
                 bass_hz=self.profile.bass_hz,
                 mid_hz=self.profile.mid_hz,
+                delta=self.profile.onset_delta,
+                alpha=self.profile.onset_alpha,
+            )
+        elif method == "superflux":
+            self._pcm_superflux = SuperfluxStftPipeline(
+                source.sample_rate,
+                mu=self.profile.superflux_mu,
+                lag=self.profile.superflux_lag,
                 delta=self.profile.onset_delta,
                 alpha=self.profile.onset_alpha,
             )
@@ -773,6 +902,13 @@ class SyncEngine:
                                 features.onset_treble = t_on
                                 features.onset_treble_strength = t_str
                                 features.onset = self._last_pcm_onset
+                    elif self._pcm_superflux is not None:
+                        sf_results = self._pcm_superflux.push(samples)
+                        if sf_results:
+                            onset, _ = sf_results[-1]
+                            self._last_pcm_onset = onset
+                            if features is not None:
+                                features.onset = onset
                     elif self._pcm_onset is not None:
                         # "combined": parallel comparison only, colour unchanged.
                         results = self._pcm_onset.push(samples)
