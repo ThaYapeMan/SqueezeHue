@@ -273,6 +273,49 @@ def test_fell_behind_subsequent_read_is_empty(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# read_new — seqlock torn-read detection
+# ---------------------------------------------------------------------------
+
+
+def test_torn_read_discards_block(tmp_path: Path) -> None:
+    """If buf_index changes between the two seqlock reads, return empty.
+
+    Simulates a concurrent squeezelite write by overriding _read_header() on
+    the instance so that its second call (post-copy check) returns a different
+    buf_index than its first call (pre-copy snapshot).
+    """
+    buf = bytearray(VIS_BUF_SIZE * 2)
+    struct.pack_into("<hh", buf, 0, 100, 200)  # one valid stereo frame
+    p = _write_vis_t(tmp_path, buf_index=2, buffer=bytes(buf))
+
+    src = SqueezeliteShmSource()
+    src.open("x", _path=p)
+    src._prev_index = 0  # 2 pending s16 samples → would normally return 1 mono sample
+
+    # Intercept _read_header: the 1st call returns the real value (buf_index=2);
+    # the 2nd call (seqlock post-copy check) simulates the writer advancing to 4.
+    _real = SqueezeliteShmSource._read_header
+    _calls = [0]
+
+    def _patched() -> tuple[int, int, bool, int, int]:
+        _calls[0] += 1
+        r = _real(src)
+        if _calls[0] == 2:
+            return (r[0], (r[1] + 2) % VIS_BUF_SIZE, r[2], r[3], r[4])
+        return r
+
+    src._read_header = _patched  # type: ignore[method-assign]
+
+    result = src.read_new()
+
+    assert result.shape == (0,), "torn read should be discarded"
+    assert result.dtype == np.float32
+    # prev_index advanced to buf_index_before so the next poll picks up from there.
+    assert src._prev_index == 2
+    src.close()
+
+
+# ---------------------------------------------------------------------------
 # Live update via shared mmap (simulates squeezelite writing new frames)
 # ---------------------------------------------------------------------------
 

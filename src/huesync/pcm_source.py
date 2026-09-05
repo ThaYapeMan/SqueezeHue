@@ -142,6 +142,20 @@ class SqueezeliteShmSource:
             raw_head = self._mm.read((n_new - tail) * 2)
             raw = raw_tail + raw_head
 
+        # Seqlock-style consistency check: if the writer advanced buf_index
+        # while we were copying, the window may contain partially overwritten
+        # samples.  Discard and let the next poll start fresh from buf_index.
+        # This never takes the pthread_rwlock, so it cannot cause squeezelite
+        # to skip exporting blocks.
+        _, buf_index_after, _, _, _ = self._read_header()
+        if buf_index_after != buf_index:
+            _log.debug(
+                "PCM tap: torn read detected (buf_index %d → %d), discarding block.",
+                buf_index,
+                buf_index_after,
+            )
+            return np.empty(0, dtype=np.float32)
+
         samples = np.frombuffer(raw, dtype=np.int16)
         # Interleaved stereo s16 → mono float32 in [−1.0, 1.0].
         # samples[0::2] = L channel, samples[1::2] = R channel.
