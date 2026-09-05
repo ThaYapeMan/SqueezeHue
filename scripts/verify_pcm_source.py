@@ -117,7 +117,8 @@ def main() -> None:
     expected_per_poll = dominant_rate * 0.100  # mono frames per 100 ms at this rate
     actual_per_poll = total_samples / POLLS
     print(f"  Expected ~{expected_per_poll:.0f} mono samples/poll at {dominant_rate} Hz")
-    print(f"  Actual   ~{actual_per_poll:.0f} mono samples/poll  ({actual_per_poll/expected_per_poll*100:.0f} %)")
+    pct = actual_per_poll / expected_per_poll * 100
+    print(f"  Actual   ~{actual_per_poll:.0f} mono samples/poll  ({pct:.0f} %)")
 
     print()
     if total_samples == 0:

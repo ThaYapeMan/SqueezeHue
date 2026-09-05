@@ -8,8 +8,6 @@ uses, so there is no seam between test and production behaviour.
 import asyncio
 from pathlib import Path
 
-import pytest
-
 from huesync.models import Profile
 from huesync.player_manager import ActiveSession, PlayerManager
 from huesync.storage import Storage

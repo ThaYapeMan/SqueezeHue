@@ -22,6 +22,7 @@ import numpy as np
 _log = logging.getLogger(__name__)
 
 VIS_BUF_SIZE = 16384  # s16 samples in the circular buffer (8192 stereo frames)
+WINDOW_SIZE = 2048  # FFT window length in samples
 
 # vis_t layout, glibc x86-64 (pthread_rwlock_t = 56 bytes):
 #   offset  0  pthread_rwlock_t  56 B  (skipped — not taken)
@@ -162,3 +163,46 @@ class SqueezeliteShmSource:
         return (samples[0::2].astype(np.float32) + samples[1::2].astype(np.float32)) / (
             2.0 * 32768.0
         )
+
+
+class PcmStft:
+    """Rolling STFT over a stream of mono float32 samples.
+
+    Accumulates samples in a ring buffer and emits one magnitude frame per hop.
+    Call ``push()`` with each batch from ``SqueezeliteShmSource.read_new()``.
+
+    Usage::
+
+        stft = PcmStft(sample_rate=44100)
+        frames = stft.push(mono_samples)   # list[np.ndarray], each shape (1025,)
+    """
+
+    def __init__(self, sample_rate: int) -> None:
+        self._hop = round(sample_rate * 0.010)
+        self._window = np.hamming(WINDOW_SIZE).astype(np.float32)
+        self._buf = np.zeros(0, dtype=np.float32)
+
+    @property
+    def hop(self) -> int:
+        """Number of samples between successive frames."""
+        return self._hop
+
+    @property
+    def n_bins(self) -> int:
+        """Number of real-valued frequency bins per frame (WINDOW_SIZE // 2 + 1)."""
+        return WINDOW_SIZE // 2 + 1
+
+    def push(self, samples: np.ndarray) -> list[np.ndarray]:
+        """Append samples and return all complete magnitude frames.
+
+        Each returned frame has shape (n_bins,) and dtype float32.
+        Returns an empty list when fewer than WINDOW_SIZE samples are buffered.
+        """
+        self._buf = np.concatenate([self._buf, samples])
+        frames: list[np.ndarray] = []
+        while len(self._buf) >= WINDOW_SIZE:
+            windowed = self._buf[:WINDOW_SIZE] * self._window
+            mag = np.abs(np.fft.rfft(windowed)).astype(np.float32)
+            frames.append(mag)
+            self._buf = self._buf[self._hop:]
+        return frames

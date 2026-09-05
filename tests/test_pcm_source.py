@@ -15,12 +15,14 @@ import numpy as np
 import pytest
 
 from huesync.pcm_source import (
-    VIS_BUF_SIZE,
     _BUF_OFFSET,
     _HDR_FMT,
     _HDR_OFFSET,
     _HDR_SIZE,
     _MMAP_SIZE,
+    VIS_BUF_SIZE,
+    WINDOW_SIZE,
+    PcmStft,
     SqueezeliteShmSource,
 )
 
@@ -345,3 +347,69 @@ def test_incremental_reads(tmp_path: Path) -> None:
         np.testing.assert_allclose(second[0], (50 + 60) / (2.0 * 32768.0), rtol=1e-6)
 
     src.close()
+
+
+# ---------------------------------------------------------------------------
+# PcmStft
+# ---------------------------------------------------------------------------
+
+
+def test_hop_44100() -> None:
+    assert PcmStft(44100).hop == 441
+
+
+def test_hop_48000() -> None:
+    assert PcmStft(48000).hop == 480
+
+
+def test_n_bins() -> None:
+    assert PcmStft(44100).n_bins == 1025
+
+
+def test_output_shape() -> None:
+    stft = PcmStft(44100)
+    silence = np.zeros(WINDOW_SIZE, dtype=np.float32)
+    frames = stft.push(silence)
+    assert len(frames) == 1
+    assert frames[0].shape == (1025,)
+    assert frames[0].dtype == np.float32
+
+
+def test_sine_peak_at_correct_bin() -> None:
+    """1000 Hz sine @ 44100 Hz must peak at bin round(1000 * 2048 / 44100) == 46."""
+    stft = PcmStft(44100)
+    t = np.arange(WINDOW_SIZE) / 44100
+    sine = np.sin(2 * np.pi * 1000 * t).astype(np.float32)
+    frames = stft.push(sine)
+    assert len(frames) == 1
+    assert np.argmax(frames[0]) == round(1000 * WINDOW_SIZE / 44100)
+
+
+def test_rolling_buffer_small_chunks() -> None:
+    """WINDOW_SIZE samples split into 16 chunks of 128 give the same frame as one push."""
+    t = np.arange(WINDOW_SIZE) / 44100
+    signal = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+
+    stft_one = PcmStft(44100)
+    frames_one = stft_one.push(signal)
+    assert len(frames_one) == 1
+
+    stft_chunked = PcmStft(44100)
+    all_frames: list[np.ndarray] = []
+    chunk_size = 128
+    for i in range(0, WINDOW_SIZE, chunk_size):
+        all_frames.extend(stft_chunked.push(signal[i : i + chunk_size]))
+
+    assert len(all_frames) == 1
+    np.testing.assert_array_equal(frames_one[0], all_frames[0])
+
+
+def test_multiple_frames_per_push() -> None:
+    """Pushing 4096 samples yields multiple frames, each with shape (1025,)."""
+    stft = PcmStft(44100)
+    signal = np.zeros(4096, dtype=np.float32)
+    frames = stft.push(signal)
+    assert len(frames) > 1
+    for frame in frames:
+        assert frame.shape == (1025,)
+        assert frame.dtype == np.float32
