@@ -27,6 +27,7 @@ from .models import Profile
 from .storage import Storage
 from .sync_engine import SyncEngine
 from .types import Colour, LatencyProbe
+from .util import generate_locally_administered_mac
 
 log = logging.getLogger(__name__)
 
@@ -274,6 +275,35 @@ class PlayerManager:
         for p in (session.fifo_path, session.cava_conf_path):
             p.unlink(missing_ok=True)
 
+        # squeezelite creates /dev/shm/squeezelite-<mac> and never removes it.
+        # Without this, every activate/deactivate cycle leaves an orphaned
+        # segment behind — confirmed: 9 segments after a handful of test runs.
+        if session.profile.player_mac:
+            Path(f"/dev/shm/squeezelite-{session.profile.player_mac}").unlink(
+                missing_ok=True
+            )
+
+    def cleanup_orphaned_shm(self) -> None:
+        """Remove squeezelite shm segments left by a previous crashed run.
+
+        Safe to call at startup: all HueSync-managed squeezelite processes
+        are dead when the service restarts, so any matching segment is stale.
+        Only segments whose MAC matches a known profile are touched; independent
+        squeezelite instances on the same host are left alone.
+        """
+        shm_dir = Path("/dev/shm")
+        if not shm_dir.is_dir():
+            return
+        known_macs = {p.player_mac for p in self.storage.list_profiles() if p.player_mac}
+        for seg in shm_dir.glob("squeezelite-*"):
+            mac = seg.name.removeprefix("squeezelite-")
+            if mac in known_macs:
+                try:
+                    seg.unlink()
+                    log.info("Removed orphaned squeezelite shm segment %s", seg.name)
+                except OSError as exc:
+                    log.warning("Could not remove %s: %s", seg.name, exc)
+
     async def restart_cava(self) -> None:
         """Restart cava within the active session without touching squeezelite or Hue.
 
@@ -493,6 +523,15 @@ class PlayerManager:
         binary = shutil.which("squeezelite")
         if not binary:
             raise RuntimeError("squeezelite binary not found on PATH")
+
+        if not profile.player_mac:
+            profile.player_mac = generate_locally_administered_mac()
+            self.storage.save_profile(profile)
+            log.info(
+                "Generated missing player_mac %s for profile %s",
+                profile.player_mac, profile.name,
+            )
+
         cmd = [
             binary,
             "-n", profile.player_name,

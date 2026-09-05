@@ -42,6 +42,8 @@ async def on_startup() -> None:
     # squeezelite/cava process behind it anymore - clear the stale state
     # rather than pretending it's still running.
     storage.set_active_profile_id(None)
+    # Remove any /dev/shm/squeezelite-* segments left by a previous crash.
+    player_manager.cleanup_orphaned_shm()
 
 
 @app.on_event("shutdown")
