@@ -127,6 +127,65 @@ def test_patch_profile_applies_partial_update(client: TestClient):
     assert body["lms_host"] == "10.0.0.1"
 
 
+def test_patch_profile_all_frontend_fields_accepted(client: TestClient):
+    """PATCH /profiles/{id} must accept every field the frontend's handleSave() sends.
+
+    ProfilePatchBody has extra="forbid", so any field the frontend sends that
+    is not listed there produces a 422.  This test sends the full payload that
+    ProfileEditor.handleSave() assembles — both the fields that existed before
+    the multiband/superflux commits (alsa_device, light_count, enabled) and
+    the new ones (onset_method, superflux_mu, superflux_lag) — and asserts
+    200 OK.  Without this test the two groups of fields were independently
+    missing from ProfilePatchBody and caused silent 422 errors in production
+    while all other tests remained green.
+    """
+    profile = Profile(name="Before", lms_host="10.0.0.1")
+    client._storage.save_profile(profile)
+
+    full_payload = {
+        # Pre-existing frontend fields that were never in ProfilePatchBody
+        "alsa_device": "hw:CARD=Dummy,DEV=0",
+        "light_count": 3,
+        "enabled": True,
+        # Fields that were in ProfilePatchBody all along
+        "name": "After",
+        "lms_host": "10.0.0.2",
+        "lms_port": 3483,
+        "player_name": "HueSync",
+        "bridge_id": "br-1",
+        "entertainment_area_id": "ea-1",
+        "entertainment_area_name": "Living Room",
+        "color_mode": "spectrum_rgb",
+        "bars": 30,
+        "sensitivity": 1.2,
+        "brightness_floor": 0.1,
+        "exertion_clip": 3.0,
+        "onset_delta": 0.1,
+        "onset_alpha": 0.9,
+        "lower_cutoff_freq": 50,
+        "higher_cutoff_freq": 12000,
+        "bass_hz": 250,
+        "mid_hz": 2000,
+        # New fields added in the multiband/superflux commits
+        "onset_method": "superflux",
+        "superflux_mu": 4,
+        "superflux_lag": 2,
+    }
+
+    resp = client.patch(f"/api/profiles/{profile.id}", json=full_payload)
+    assert resp.status_code == 200, (
+        f"PATCH with full frontend payload returned {resp.status_code}: {resp.text}\n"
+        "Check that ProfilePatchBody lists every field the frontend sends."
+    )
+    body = resp.json()
+    assert body["name"] == "After"
+    assert body["onset_method"] == "superflux"
+    assert body["superflux_mu"] == 4
+    assert body["alsa_device"] == "hw:CARD=Dummy,DEV=0"
+    assert body["light_count"] == 3
+    assert body["enabled"] is True
+
+
 def test_patch_profile_does_not_touch_other_fields(client: TestClient):
     profile = Profile(name="A", sensitivity=0.5, brightness_floor=0.3)
     client._storage.save_profile(profile)

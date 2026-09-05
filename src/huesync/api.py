@@ -61,9 +61,11 @@ class ProfilePatchBody(BaseModel):
     lms_host: str | None = None
     lms_port: int | None = None
     player_name: str | None = None
+    alsa_device: str | None = None
     bridge_id: str | None = None
     entertainment_area_id: str | None = None
     entertainment_area_name: str | None = None
+    light_count: int | None = None
     color_mode: str | None = None
     sensitivity: float | None = None
     brightness_floor: float | None = None
@@ -74,7 +76,11 @@ class ProfilePatchBody(BaseModel):
     mid_hz: int | None = None
     onset_delta: float | None = None
     onset_alpha: float | None = None
+    onset_method: str | None = None
+    superflux_mu: int | None = None
+    superflux_lag: int | None = None
     exertion_clip: float | None = None
+    enabled: bool | None = None
 
 
 class PlayerLatencyCreateBody(BaseModel):
