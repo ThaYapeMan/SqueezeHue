@@ -34,6 +34,9 @@ export interface Profile {
   mid_hz: number
   onset_delta: number
   onset_alpha: number
+  onset_method: string
+  superflux_mu: number
+  superflux_lag: number
   exertion_clip: number
   enabled: boolean
 }

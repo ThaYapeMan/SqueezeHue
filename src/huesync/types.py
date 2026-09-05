@@ -149,6 +149,17 @@ class AudioFeatures:
     onset: bool = False
     onset_strength: float = 0.0
 
+    # Per-band onset for multiband method (bass/mid/treble band boundaries set
+    # by profile.bass_hz and profile.mid_hz).  All False when onset_method !=
+    # "multiband".  onset = onset_bass or onset_mid or onset_treble when
+    # multiband is active so that downstream code that only reads onset works.
+    onset_bass: bool = False
+    onset_mid: bool = False
+    onset_treble: bool = False
+    onset_bass_strength: float = 0.0
+    onset_mid_strength: float = 0.0
+    onset_treble_strength: float = 0.0
+
     # Filled by LibrosaAnalyser or AubioAnalyser; None when unavailable.
     # Effects must degrade gracefully (e.g. fall back to onset-triggered
     # behaviour) when these fields are None.

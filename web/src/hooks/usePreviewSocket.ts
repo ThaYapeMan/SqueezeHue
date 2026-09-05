@@ -20,6 +20,9 @@ export interface SocketStatus {
 export interface PreviewState {
   colour: { r: number; g: number; b: number }
   onset: boolean
+  onset_bass: boolean
+  onset_mid: boolean
+  onset_treble: boolean
   bars: number[]
   status: SocketStatus | null
   connected: boolean
@@ -29,6 +32,9 @@ export interface PreviewState {
 const INITIAL_STATE: PreviewState = {
   colour: { r: 0, g: 0, b: 0 },
   onset: false,
+  onset_bass: false,
+  onset_mid: false,
+  onset_treble: false,
   bars: [],
   status: null,
   connected: false,
@@ -38,6 +44,9 @@ const INITIAL_STATE: PreviewState = {
 export function usePreviewSocket(): PreviewState {
   const [state, setState] = useState<PreviewState>(INITIAL_STATE)
   const onsetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const bassTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const midTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const trebleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -76,13 +85,44 @@ export function usePreviewSocket(): PreviewState {
           // Values arrive as 16-bit (0–65535); normalise to 0–1 for CSS.
           const colour = { r: c.r / 65535, g: c.g / 65535, b: c.b / 65535 }
           const onset = msg.onset as boolean
+          const onset_bass = (msg.onset_bass as boolean) ?? false
+          const onset_mid = (msg.onset_mid as boolean) ?? false
+          const onset_treble = (msg.onset_treble as boolean) ?? false
 
-          setState((s) => ({ ...s, colour, onset: onset || s.onset }))
+          setState((s) => ({
+            ...s,
+            colour,
+            onset: onset || s.onset,
+            onset_bass: onset_bass || s.onset_bass,
+            onset_mid: onset_mid || s.onset_mid,
+            onset_treble: onset_treble || s.onset_treble,
+          }))
 
           if (onset) {
             if (onsetTimer.current) clearTimeout(onsetTimer.current)
             onsetTimer.current = setTimeout(
               () => setState((s) => ({ ...s, onset: false })),
+              80
+            )
+          }
+          if (onset_bass) {
+            if (bassTimer.current) clearTimeout(bassTimer.current)
+            bassTimer.current = setTimeout(
+              () => setState((s) => ({ ...s, onset_bass: false })),
+              80
+            )
+          }
+          if (onset_mid) {
+            if (midTimer.current) clearTimeout(midTimer.current)
+            midTimer.current = setTimeout(
+              () => setState((s) => ({ ...s, onset_mid: false })),
+              80
+            )
+          }
+          if (onset_treble) {
+            if (trebleTimer.current) clearTimeout(trebleTimer.current)
+            trebleTimer.current = setTimeout(
+              () => setState((s) => ({ ...s, onset_treble: false })),
               80
             )
           }
@@ -101,6 +141,9 @@ export function usePreviewSocket(): PreviewState {
       stopped = true
       if (reconnectTimer) clearTimeout(reconnectTimer)
       if (onsetTimer.current) clearTimeout(onsetTimer.current)
+      if (bassTimer.current) clearTimeout(bassTimer.current)
+      if (midTimer.current) clearTimeout(midTimer.current)
+      if (trebleTimer.current) clearTimeout(trebleTimer.current)
       ws?.close()
     }
   }, [])

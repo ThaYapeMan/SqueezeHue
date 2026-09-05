@@ -113,12 +113,27 @@ class PlayerManager:
 
     @property
     def last_pcm_onset(self) -> bool:
-        """True if the PCM-tap onset pipeline detected an onset this tick.
-
-        Parallel to last_onset (cava-based); used for timing comparison only.
-        """
+        """True if the PCM-tap onset pipeline detected an onset this tick."""
         if self._active and self._active.sync_engine:
             return self._active.sync_engine.last_pcm_onset
+        return False
+
+    @property
+    def last_onset_bass(self) -> bool:
+        if self._active and self._active.sync_engine:
+            return self._active.sync_engine.last_onset_bass
+        return False
+
+    @property
+    def last_onset_mid(self) -> bool:
+        if self._active and self._active.sync_engine:
+            return self._active.sync_engine.last_onset_mid
+        return False
+
+    @property
+    def last_onset_treble(self) -> bool:
+        if self._active and self._active.sync_engine:
+            return self._active.sync_engine.last_onset_treble
         return False
 
     @property

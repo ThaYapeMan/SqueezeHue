@@ -28,6 +28,9 @@ interface Props {
   higherCutoffHz?: number
   bassHz?: number
   midHz?: number
+  onsetBass?: boolean
+  onsetMid?: boolean
+  onsetTreble?: boolean
 }
 
 export function SpectrumBars({
@@ -37,6 +40,9 @@ export function SpectrumBars({
   higherCutoffHz = 12000,
   bassHz = 250,
   midHz = 2000,
+  onsetBass = false,
+  onsetMid = false,
+  onsetTreble = false,
 }: Props) {
   const data = bars.length > 0 ? bars : Array(PLACEHOLDER_COUNT).fill(0)
   const n = data.length
@@ -127,13 +133,16 @@ export function SpectrumBars({
           </div>
 
           <div className="flex justify-between mt-1 text-xs font-mono">
-            <span style={{ color: BAND_COLORS.bass }}>
+            <span style={{ color: BAND_COLORS.bass }} className="flex items-center gap-1">
+              {onsetBass && <span className="inline-block w-1.5 h-1.5 rounded-full bg-current" />}
               {bassEmpty ? <em className="not-italic opacity-50">Bass (empty)</em> : `Bass ${bassAvg.toFixed(2)}`}
             </span>
-            <span style={{ color: BAND_COLORS.mid }}>
+            <span style={{ color: BAND_COLORS.mid }} className="flex items-center gap-1">
+              {onsetMid && <span className="inline-block w-1.5 h-1.5 rounded-full bg-current" />}
               {midEmpty ? <em className="not-italic opacity-50">Mid (empty)</em> : `Mid ${midAvg.toFixed(2)}`}
             </span>
-            <span style={{ color: BAND_COLORS.treble }}>
+            <span style={{ color: BAND_COLORS.treble }} className="flex items-center gap-1">
+              {onsetTreble && <span className="inline-block w-1.5 h-1.5 rounded-full bg-current" />}
               {trebleEmpty ? <em className="not-italic opacity-50">Treble (empty)</em> : `Treble ${trebleAvg.toFixed(2)}`}
             </span>
           </div>

@@ -53,6 +53,7 @@ interface FormState {
   exertion_clip: number
   onset_delta: number
   onset_alpha: number
+  onset_method: string
   lower_cutoff_freq: string
   higher_cutoff_freq: string
   bass_hz: string
@@ -76,6 +77,7 @@ function defaultForm(profile?: Profile): FormState {
     exertion_clip: profile?.exertion_clip ?? 2.0,
     onset_delta: profile?.onset_delta ?? 0.07,
     onset_alpha: profile?.onset_alpha ?? 0.9,
+    onset_method: profile?.onset_method ?? 'combined',
     lower_cutoff_freq: String(profile?.lower_cutoff_freq ?? 50),
     higher_cutoff_freq: String(profile?.higher_cutoff_freq ?? 12000),
     bass_hz: String(profile?.bass_hz ?? 250),
@@ -179,6 +181,7 @@ export function ProfileEditor({ profile, bridges, onSave, onClose, open }: Props
         exertion_clip: form.exertion_clip,
         onset_delta: form.onset_delta,
         onset_alpha: form.onset_alpha,
+        onset_method: form.onset_method,
         lower_cutoff_freq: parseInt(form.lower_cutoff_freq, 10),
         higher_cutoff_freq: parseInt(form.higher_cutoff_freq, 10),
         bass_hz: parseInt(form.bass_hz, 10),
@@ -372,6 +375,23 @@ export function ProfileEditor({ profile, bridges, onSave, onClose, open }: Props
 
           <SectionLabel>Onset detection</SectionLabel>
           <div className="space-y-3">
+            <FormRow label="Method">
+              <Select value={form.onset_method} onValueChange={(v) => set('onset_method', v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="combined">Combined (cava, 30 Hz)</SelectItem>
+                  <SelectItem value="multiband">Multiband (PCM tap, 100 Hz)</SelectItem>
+                  <SelectItem value="superflux">SuperFlux (PCM tap, 100 Hz)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                {form.onset_method === 'multiband' && 'Per-band onset: bass/mid/treble detected independently at 100 Hz.'}
+                {form.onset_method === 'superflux' && 'SuperFlux: max-filter suppresses vibrato false triggers (Böck & Widmer 2013).'}
+                {form.onset_method === 'combined' && 'Full-spectrum spectral flux on cava bars at 30 Hz.'}
+              </p>
+            </FormRow>
             <SliderField
               label="Onset delta"
               value={form.onset_delta}

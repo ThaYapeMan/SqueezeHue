@@ -146,6 +146,14 @@ class Profile:
     # onset_alpha: per-frame decay of the adaptive suppression threshold (condition 3).
     # Higher values = longer suppression after a loud onset.  Range 0–1.
     onset_alpha: float = 0.9
+    # onset_method: which ODF is used for onset detection.
+    #   "combined"  — full-spectrum spectral flux on cava bars (default, 30 Hz)
+    #   "multiband" — per-band flux on 100 Hz STFT data; fills onset_bass/mid/treble
+    #   "superflux" — Böck & Widmer (2013) SuperFlux on 100 Hz STFT data
+    onset_method: str = "combined"
+    # SuperFlux parameters (used only when onset_method == "superflux").
+    superflux_mu: int = 3   # max-filter half-width in FFT bins
+    superflux_lag: int = 2  # compare frame n with frame n-lag
 
     # Three-layer loudness pipeline:
     #   1. exertion_clip (HERE): sets "maximally loud" in relative terms.

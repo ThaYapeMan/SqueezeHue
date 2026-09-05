@@ -100,9 +100,9 @@ function StatusGrid({ status }: { status: SocketStatus | null }) {
   )
 }
 
-type Props = Pick<PreviewState, 'colour' | 'onset' | 'bars' | 'status'>
+type Props = Pick<PreviewState, 'colour' | 'onset' | 'onset_bass' | 'onset_mid' | 'onset_treble' | 'bars' | 'status'>
 
-export function NowPlaying({ colour, onset, bars, status }: Props) {
+export function NowPlaying({ colour, onset, onset_bass, onset_mid, onset_treble, bars, status }: Props) {
   const profileId = status?.active_profile_id ?? null
 
   // Track which profileId the sliders were last initialized for, so we
@@ -272,6 +272,9 @@ export function NowPlaying({ colour, onset, bars, status }: Props) {
             higherCutoffHz={appliedHigher}
             bassHz={appliedBass}
             midHz={appliedMid}
+            onsetBass={onset_bass}
+            onsetMid={onset_mid}
+            onsetTreble={onset_treble}
           />
 
           {profileId && (
