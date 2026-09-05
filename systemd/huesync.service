@@ -9,6 +9,15 @@ User=huesync
 Group=huesync
 WorkingDirectory=/opt/huesync
 Environment=HUESYNC_CONFIG=/etc/huesync/config.json
+# Remove any /dev/shm/squeezelite-* segments before the service starts.
+# Runs as root so it can remove files created during manual debugging or
+# prior runs under a different user (sticky bit on /dev/shm means the
+# huesync user can only unlink files it owns, so the Python-level
+# cleanup_orphaned_shm() cannot reach root-owned artefacts).
+# cleanup_orphaned_shm() in player_manager.py still handles the normal
+# case (huesync-owned segments from clean teardown failures); this covers
+# the edge case that Python can never fix on its own.
+ExecStartPre=/bin/sh -c 'rm -f /dev/shm/squeezelite-*'
 ExecStart=/opt/huesync/.venv/bin/huesync
 Restart=on-failure
 RestartSec=5
