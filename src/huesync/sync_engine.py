@@ -25,8 +25,11 @@ import threading
 import time
 from collections import deque
 
+import numpy as np
+
 from .latency import NoLatencyProbe
 from .models import ColorMode, Profile
+from .pcm_source import PcmStft, SqueezeliteShmSource
 from .types import (
     Analyser,
     AudioFeatures,
@@ -318,6 +321,40 @@ class OnsetDetector:
 
 
 # ---------------------------------------------------------------------------
+# StftOnsetPipeline — 'combined' onset detector on PcmStft magnitude frames
+# ---------------------------------------------------------------------------
+
+
+class StftOnsetPipeline:
+    """'Combined' onset detector (Dixon 2006) running on STFT magnitude frames.
+
+    Implements step 3 of docs/HueSync_pcm_tap_spec.md: spectral flux is summed
+    across all 1025 FFT bins, then Dixon's three peak-picking conditions are
+    applied.  This is a parallel path alongside cava; it does not affect colour.
+
+    Usage::
+
+        pipeline = StftOnsetPipeline(sample_rate=44100)
+        results = pipeline.push(mono_float32_samples)
+        # results: list of (onset: bool, strength: float) per STFT frame
+    """
+
+    def __init__(
+        self, sample_rate: int, delta: float = 0.1, alpha: float = 0.9
+    ) -> None:
+        self._stft = PcmStft(sample_rate)
+        self._onset = OnsetDetector(delta=delta, alpha=alpha)
+
+    @property
+    def hop(self) -> int:
+        return self._stft.hop
+
+    def push(self, samples: np.ndarray) -> list[tuple[bool, float]]:
+        """Process PCM samples; return *(onset, strength)* per STFT frame."""
+        return [self._onset.process(frame.tolist()) for frame in self._stft.push(samples)]
+
+
+# ---------------------------------------------------------------------------
 # Helpers shared by CavaAnalyser and ColourModeEffect
 # ---------------------------------------------------------------------------
 
@@ -545,6 +582,23 @@ class SyncEngine:
         self._delay_buffer: deque[Scene | None] = deque()
         self._last_onset: bool = False
         self._last_bars: list[float] = []
+        self._shm_source: SqueezeliteShmSource | None = None
+        self._pcm_onset: StftOnsetPipeline | None = None
+        self._last_pcm_onset: bool = False
+
+    def attach_shm_source(self, source: SqueezeliteShmSource) -> None:
+        """Connect a SHM source for the parallel PCM-tap onset pipeline.
+
+        Call after the squeezelite SHM segment is confirmed ready (i.e. after
+        _start_cava() returns in PlayerManager) and before run() is started.
+        The colour path is unaffected; this only drives last_pcm_onset.
+        """
+        self._shm_source = source
+        self._pcm_onset = StftOnsetPipeline(
+            source.sample_rate,
+            delta=self.profile.onset_delta,
+            alpha=self.profile.onset_alpha,
+        )
 
     def update_probe(self, probe: LatencyProbe) -> None:
         """Swap the latency probe live. Safe to call from the asyncio event loop."""
@@ -558,6 +612,10 @@ class SyncEngine:
     @property
     def last_onset(self) -> bool:
         return self._last_onset
+
+    @property
+    def last_pcm_onset(self) -> bool:
+        return self._last_pcm_onset
 
     @property
     def last_bars(self) -> list[float]:
@@ -604,5 +662,13 @@ class SyncEngine:
                 entry = self._delay_buffer.popleft()
                 if entry is not None:
                     output.send(entry, time.monotonic())
+
+            # Parallel PCM-tap onset path — comparison only, no colour output.
+            if self._pcm_onset is not None and self._shm_source is not None:
+                samples = self._shm_source.read_new()
+                if len(samples) > 0:
+                    results = self._pcm_onset.push(samples)
+                    if results:
+                        self._last_pcm_onset = any(onset for onset, _ in results)
 
             await asyncio.sleep(SEND_INTERVAL_S)

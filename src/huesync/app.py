@@ -72,6 +72,7 @@ async def ws_preview(websocket: WebSocket):
                 "type": "frame",
                 "colour": {"r": r, "g": g, "b": b},
                 "onset": onset,
+                "pcm_onset": player_manager.last_pcm_onset,
             })
 
             if tick % 3 == 0:

@@ -24,6 +24,7 @@ from .latency import FixedLatencyProbe, NoLatencyProbe
 from .lms_discovery import discover_lms
 from .lms_status import query_lms_status, query_lms_sync_peers
 from .models import Profile
+from .pcm_source import SqueezeliteShmSource
 from .storage import Storage
 from .sync_engine import SyncEngine
 from .types import Colour, LatencyProbe
@@ -68,6 +69,7 @@ class ActiveSession:
         self.task: asyncio.Task | None = None
         self.probe: LatencyProbe = NoLatencyProbe()
         self.poller_task: asyncio.Task | None = None
+        self.shm_source: SqueezeliteShmSource | None = None
 
 
 class PlayerManager:
@@ -107,6 +109,16 @@ class PlayerManager:
         """
         if self._active and self._active.sync_engine:
             return self._active.sync_engine.last_onset
+        return False
+
+    @property
+    def last_pcm_onset(self) -> bool:
+        """True if the PCM-tap onset pipeline detected an onset this tick.
+
+        Parallel to last_onset (cava-based); used for timing comparison only.
+        """
+        if self._active and self._active.sync_engine:
+            return self._active.sync_engine.last_pcm_onset
         return False
 
     @property
@@ -218,6 +230,21 @@ class PlayerManager:
             engine.start()
             self._start_cava(session, profile)
 
+            # _start_cava() waits until the SHM segment exists, so it is safe
+            # to open it here.  Failure is non-fatal: cava still drives colour.
+            shm_source = SqueezeliteShmSource()
+            try:
+                shm_source.open(profile.player_mac)
+                session.shm_source = shm_source
+                engine.attach_shm_source(shm_source)
+                log.debug("PCM tap SHM source opened for profile %s", profile.name)
+            except Exception as exc:
+                log.warning(
+                    "Could not open squeezelite SHM for PCM onset tap "
+                    "(cava-based onset still active): %s",
+                    exc,
+                )
+
             hue_driver = HueDriver(output_config, channels)
             await hue_driver.start()
             session.hue_driver = hue_driver
@@ -256,6 +283,9 @@ class PlayerManager:
             session.task.cancel()
         if session.sync_engine:
             session.sync_engine.stop()
+        if session.shm_source is not None:
+            session.shm_source.close()
+            session.shm_source = None
         await session.probe.stop()
         if session.hue_driver:
             try:
